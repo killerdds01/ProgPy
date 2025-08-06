@@ -4,85 +4,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Waste Classifier</title>
+    <!-- Includi Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        /* Stili personalizzati per il font (Inter) */
         body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f0f2f5;
+            font-family: 'Inter', sans-serif;
         }
-        .container {
-            text-align: center;
-            background-color: white;
-            padding: 2em;
-            border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
-        }
-        input[type="file"] {
-            margin: 1em 0;
-        }
-        button {
-            padding: 0.5em 2em;
-            font-size: 1em;
+        /* Stili per il contenitore del file input */
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
             cursor: pointer;
-            border: none;
-            background-color: #007BFF;
+        }
+        .file-input-wrapper input[type=file] {
+            font-size: 100px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .file-input-wrapper .btn-upload {
+            background-color: #4F46E5; /* Indigo 600 */
             color: white;
-            border-radius: 5px;
-            transition: background-color 0.3s;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: background-color 0.3s ease;
+            cursor: pointer;
         }
-        button:hover {
-            background-color: #0056b3;
-        }
-        #result-container {
-            margin-top: 2em;
-            font-size: 1.2em;
-            min-height: 50px;
-        }
-        #result-container h2 {
-            color: #007BFF;
-            margin-bottom: 0.5em;
-        }
-        #result-container p {
-            margin: 0;
-            color: #555;
+        .file-input-wrapper .btn-upload:hover {
+            background-color: #4338CA; /* Indigo 700 */
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>Smart Waste Classifier</h1>
-        <p>Carica un'immagine per scoprire come smaltire il tuo rifiuto.</p>
-        <input type="file" id="image-upload" accept="image/*">
-        <button id="predict-button">Classifica Rifiuto</button>
-        <div id="result-container">
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+    <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md text-center">
+        <h1 class="text-4xl font-extrabold text-indigo-700 mb-4">Smart Waste Classifier</h1>
+        <p class="text-gray-600 mb-6">Carica un'immagine per scoprire come smaltire il tuo rifiuto.</p>
+
+        <div class="mb-6">
+            <div class="file-input-wrapper">
+                <button class="btn-upload">Scegli File</button>
+                <input type="file" id="image-upload" accept="image/*">
             </div>
+            <span id="file-name" class="ml-3 text-gray-500 text-sm">Nessun file selezionato</span>
+        </div>
+        
+        <button id="predict-button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50">
+            Classifica Rifiuto
+        </button>
+
+        <div id="result-container" class="mt-8 p-4 bg-indigo-50 rounded-lg text-indigo-800 text-lg font-semibold min-h-[60px] flex items-center justify-center">
+            <!-- I risultati della predizione appariranno qui -->
+        </div>
+
+        <!-- Loading spinner -->
+        <div id="loading-spinner" class="hidden mt-4 flex justify-center items-center">
+            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+            <span class="ml-3 text-indigo-600">Classificazione in corso...</span>
+        </div>
     </div>
 
     <script>
         const predictButton = document.getElementById('predict-button');
         const imageUpload = document.getElementById('image-upload');
         const resultContainer = document.getElementById('result-container');
+        const fileNameSpan = document.getElementById('file-name');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        // Aggiorna il nome del file selezionato
+        imageUpload.addEventListener('change', () => {
+            if (imageUpload.files.length > 0) {
+                fileNameSpan.textContent = imageUpload.files[0].name;
+            } else {
+                fileNameSpan.textContent = 'Nessun file selezionato';
+            }
+        });
 
         predictButton.addEventListener('click', async () => {
             const file = imageUpload.files[0];
             if (!file) {
-                resultContainer.innerHTML = '<p style="color: red;">Seleziona un file immagine prima di procedere.</p>';
+                resultContainer.innerHTML = '<p class="text-red-600">Seleziona un file immagine prima di procedere.</p>';
                 return;
             }
 
             const formData = new FormData();
             formData.append('file', file);
 
-            // Mostra un messaggio di caricamento
-            resultContainer.innerHTML = '<p>Classificazione in corso...</p>';
+            // Mostra spinner di caricamento e disabilita il pulsante
+            resultContainer.innerHTML = ''; // Pulisce i risultati precedenti
+            loadingSpinner.classList.remove('hidden');
             predictButton.disabled = true;
+            predictButton.classList.add('opacity-50', 'cursor-not-allowed');
 
             try {
                 const response = await fetch('http://127.0.0.1:5000/predict', {
@@ -96,14 +112,20 @@
 
                 const data = await response.json();
                 resultContainer.innerHTML = `
-                    <h2>Risultato:</h2>
-                    <p>Classe: <strong>${data.class}</strong></p>
+                    <p>Classe: <strong class="capitalize">${data.class}</strong></p>
                     <p>Confidenza: <strong>${data.confidence}</strong></p>
                 `;
+                resultContainer.classList.remove('bg-red-50', 'text-red-800'); // Rimuovi stili di errore se presenti
+                resultContainer.classList.add('bg-indigo-50', 'text-indigo-800'); // Applica stili di successo
             } catch (error) {
-                resultContainer.innerHTML = `<p style="color: red;">Errore durante la previsione: ${error.message}</p>`;
+                resultContainer.innerHTML = `<p class="text-red-600">Errore durante la previsione: ${error.message}</p>`;
+                resultContainer.classList.remove('bg-indigo-50', 'text-indigo-800'); // Rimuovi stili di successo
+                resultContainer.classList.add('bg-red-50', 'text-red-800'); // Applica stili di errore
             } finally {
+                // Nascondi spinner e riabilita il pulsante
+                loadingSpinner.classList.add('hidden');
                 predictButton.disabled = false;
+                predictButton.classList.remove('opacity-50', 'cursor-not-allowed');
             }
         });
     </script>
