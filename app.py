@@ -4,10 +4,11 @@ import io
 import datetime
 
 # Moduli Flask e estensioni
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, session
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash # Per la gestione sicura delle password
+from dotenv import load_dotenv
 
 # Moduli PyTorch per il modello
 import torch
@@ -19,6 +20,11 @@ from PIL import Image
 from pymongo import MongoClient
 from bson.objectid import ObjectId # Necessario per convertire l'ID di MongoDB
 
+# Carica le variabili d'ambiente dal file .env.
+# Questa riga DEVE essere chiamata prima di accedere a qualsiasi variabile d'ambiente
+# definita nel file .env (come SECRET_KEY).
+load_dotenv()
+
 # --- Inizializzazione dell'Applicazione Flask ---
 app = Flask(__name__)
 
@@ -27,8 +33,9 @@ app = Flask(__name__)
 # È imperativo che questa chiave sia una stringa lunga, casuale e mantenuta segreta.
 # Per la distribuzione online e su repository pubblici (es. GitHub),
 # la chiave DEVE essere letta da una variabile d'ambiente e MAI committata direttamente nel codice.
+# La chiave di fallback viene usata SOLO se la variabile d'ambiente 'SECRET_KEY' non è impostata.
 # Esempio per generare una chiave robusta: python -c "import os; print(os.urandom(24).hex())"
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'e00d87cee9282c6458684cec5045dac65768c6db28968f2d!')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'CHIAVE_DI_DEFAULT_NON_SICURA_IN_PRODUZIONE_CAMBIALA_SUBITO!')
 
 # Abilita Cross-Origin Resource Sharing (CORS) per l'applicazione.
 # Permette al frontend (servito da Flask) di effettuare richieste all'API Flask stessa.
@@ -38,7 +45,7 @@ CORS(app)
 # Configura l'estensione Flask-Login per gestire le sessioni utente.
 login_manager = LoginManager()
 login_manager.init_app(app)
-# Specifica la vista di login a cui reindirizzare gli utenti non autenticati
+# Specifica la vista di login a cui reindirizzare gli utenti non autentificati
 login_manager.login_view = 'login' 
 
 # --- Connessione al Database MongoDB ---
@@ -122,6 +129,7 @@ transform = transforms.Compose([
 # --- Rotte dell'Applicazione ---
 
 @app.route('/')
+@login_required # Questa rotta richiede che l'utente sia autenticato per accedere alla home.
 def home():
     # Renderizza la pagina principale dell'applicazione, dedicata alla classificazione.
     return render_template('index.html')
@@ -179,10 +187,11 @@ def login():
 @app.route('/logout')
 @login_required # Questa rotta richiede che l'utente sia autenticato per poter effettuare il logout.
 def logout():
+    session.pop('_flashes', None) # Rimuove i messaggi flash dalla sessione.
     # Effettua il logout dell'utente dalla sessione.
     logout_user() 
     flash('Logout effettuato con successo.', 'info')
-    return redirect(url_for('home'))
+    return redirect(url_for('login'))
 
 @app.route('/predict', methods=['POST'])
 @login_required # Questa rotta richiede che l'utente sia autenticato per poter classificare un'immagine.
@@ -226,14 +235,18 @@ def predict():
                 'confidence': f"{predicted_prob.item() * 100:.2f}%", # La confidenza della previsione in percentuale.
                 'timestamp': datetime.datetime.now(), # Timestamp della previsione.
                 'image_filename': file.filename, # Nome originale del file immagine caricato.
-                'user_id': current_user.id # Associa la previsione all'ID dell'utente autenticato.
+                'user_id': current_user.id, # Associa la previsione all'ID dell'utente autenticato.
+                'feedback': None, # Campo per il feedback utente (inizialmente None)
+                'correct_class_feedback': None # Campo per la classe corretta se il feedback è 'sbagliato'
             }
-            predictions_collection.insert_one(prediction_data) # Salva il documento nella collezione 'predictions'.
+            # Inserisce il documento nella collezione 'predictions' e ottiene l'ID generato.
+            inserted_id = predictions_collection.insert_one(prediction_data).inserted_id
 
-            # Ritorna la previsione come risposta JSON al client.
+            # Ritorna la previsione come risposta JSON al client, includendo l'ID della predizione.
             return jsonify({
                 'class': predicted_class, 
-                'confidence': f"{predicted_prob.item() * 100:.2f}%" 
+                'confidence': f"{predicted_prob.item() * 100:.2f}%",
+                'prediction_id': str(inserted_id) # Restituisce l'ID della predizione
             })
         except Exception as e:
             # Cattura e stampa eventuali errori durante l'elaborazione dell'immagine o la previsione.
@@ -243,6 +256,41 @@ def predict():
         
     # Gestisce il caso in cui il file non è stato processato per un motivo sconosciuto.
     return jsonify({'error': 'Errore sconosciuto durante la previsione.'}), 500
+
+@app.route('/feedback', methods=['POST'])
+@login_required # Questa rotta richiede che l'utente sia autenticato per inviare feedback.
+def submit_feedback():
+    data = request.get_json()
+    prediction_id = data.get('prediction_id')
+    feedback_type = data.get('feedback_type') # 'correct' o 'incorrect'
+    correct_class = data.get('correct_class') # Solo se feedback_type è 'incorrect'
+
+    if not prediction_id or not feedback_type:
+        return jsonify({'error': 'Dati feedback mancanti.'}), 400
+
+    try:
+        # Aggiorna il documento della predizione nel database
+        update_fields = {
+            'feedback': feedback_type,
+            'feedback_timestamp': datetime.datetime.now()
+        }
+        if feedback_type == 'incorrect' and correct_class:
+            update_fields['correct_class_feedback'] = correct_class
+
+        result = predictions_collection.update_one(
+            {'_id': ObjectId(prediction_id), 'user_id': current_user.id}, # Assicurati che l'utente possa modificare solo le proprie predizioni
+            {'$set': update_fields}
+        )
+
+        if result.matched_count == 0:
+            return jsonify({'error': 'Predizione non trovata o non autorizzata.'}), 404
+        
+        return jsonify({'message': 'Feedback ricevuto e salvato con successo.'}), 200
+
+    except Exception as e:
+        print(f"Errore durante il salvataggio del feedback: {e}")
+        return jsonify({'error': f'Errore del server durante il salvataggio del feedback: {str(e)}'}), 500
+
 
 @app.route('/dashboard')
 @login_required # Questa rotta richiede che l'utente sia autenticato per accedere alla dashboard.
