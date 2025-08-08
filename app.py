@@ -5,11 +5,15 @@ import datetime
 import uuid
 
 # Moduli Flask e estensioni
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, session
+from flask import Flask, request, jsonify, render_template, redirect, url_for, flash, session, send_from_directory
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
+from flask_wtf.csrf import CSRFProtect
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, SubmitField
+from wtforms.validators import DataRequired, Length, ValidationError
 
 # Moduli PyTorch per il modello
 import torch
@@ -27,8 +31,20 @@ load_dotenv()
 # --- Inizializzazione dell'Applicazione Flask ---
 app = Flask(__name__)
 
-# Configurazione della chiave segreta dell'applicazione.
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'CHIAVE_DI_DEFAULT_NON_SICURA_IN_PRODUZIONE_CAMBIALA_SUBITO!')
+# --- Configurazione della chiave segreta dell'applicazione ---
+# È FONDAMENTALE che questa chiave sia un valore casuale, lungo e segreto,
+# e che sia COSTANTE tra i riavvii del server.
+# Assicurati di avere un file .env con `SECRET_KEY="..."`
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
+
+if not app.config['SECRET_KEY']:
+    # Fallback sicuro per lo sviluppo, ma non adatto per la produzione
+    # In produzione, lancia un errore se la SECRET_KEY non è impostata
+    app.config['SECRET_KEY'] = 'CHIAVE_DI_DEFAULT_NON_SICURA_IN_PRODUZIONE_CAMBIALA_SUBITO!'
+    print("ATTENZIONE: SECRET_KEY non trovata nel file .env. Viene usata una chiave di default.")
+else:
+    print("SECRET_KEY caricata correttamente.")
+
 
 # Imposta la cartella in cui verranno salvate le immagini caricate dagli utenti.
 UPLOAD_FOLDER = 'uploaded_images'
@@ -40,6 +56,9 @@ if not os.path.exists(UPLOAD_FOLDER):
     print(f"Creata la cartella di upload: {UPLOAD_FOLDER}")
 
 CORS(app) 
+
+# --- Abilita la protezione CSRF per l'intera applicazione ---
+csrf = CSRFProtect(app)
 
 # --- Inizializzazione Flask-Login ---
 login_manager = LoginManager()
@@ -73,6 +92,22 @@ def load_user(user_id):
     if user_data:
         return User(user_data)
     return None
+
+# --- Definizione dei form usando Flask-WTF ---
+class RegistrationForm(FlaskForm):
+    username = StringField('Nome Utente', validators=[DataRequired(), Length(min=4, max=20)])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=6)])
+    submit = SubmitField('Registrati')
+
+    def validate_username(self, username):
+        user_data = users_collection.find_one({'username': username.data})
+        if user_data:
+            raise ValidationError('Nome utente già esistente. Scegli un altro nome.')
+
+class LoginForm(FlaskForm):
+    username = StringField('Nome Utente', validators=[DataRequired()])
+    password = PasswordField('Password', validators=[DataRequired()])
+    submit = SubmitField('Accedi')
 
 # --- Configurazione e Caricamento del Modello di Machine Learning ---
 CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
@@ -111,44 +146,49 @@ transform = transforms.Compose([
 def home():
     return render_template('index.html')
 
+@app.route('/uploads/<filename>')
+@login_required
+def uploaded_file(filename):
+    """
+    Serve i file statici dalla cartella di upload per visualizzare le immagini.
+    """
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated:
         return redirect(url_for('home'))
 
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-
-        if users_collection.find_one({'username': username}):
-            flash('Nome utente già esistente. Scegli un altro nome.', 'error')
-            return render_template('register.html')
+    form = RegistrationForm()
+    if form.validate_on_submit():
+        username = form.username.data
+        password = form.password.data
 
         hashed_password = generate_password_hash(password)
         
         users_collection.insert_one({'username': username, 'password': hashed_password})
         flash('Registrazione avvenuta con successo! Ora puoi effettuare il login.', 'success')
         return redirect(url_for('login'))
-    return render_template('register.html')
+        
+    return render_template('register.html', form=form)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('home'))
 
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        user_data = users_collection.find_one({'username': username})
-
-        if user_data and check_password_hash(user_data['password'], password):
+    form = LoginForm()
+    if form.validate_on_submit():
+        user_data = users_collection.find_one({'username': form.username.data})
+        if user_data and check_password_hash(user_data['password'], form.password.data):
             user = User(user_data)
             login_user(user)
             flash('Login effettuato con successo!', 'success')
             return redirect(url_for('home'))
         else:
             flash('Nome utente o password non validi.', 'error')
-    return render_template('login.html')
+    
+    return render_template('login.html', form=form)
 
 @app.route('/logout')
 @login_required
@@ -160,6 +200,7 @@ def logout():
 
 @app.route('/predict', methods=['POST'])
 @login_required
+@csrf.exempt # Aggiungi questo decoratore per escludere la protezione CSRF su questa rotta
 def predict():
     """
     Gestisce l'upload di un'immagine, la salva, esegue una predizione
@@ -223,6 +264,7 @@ def predict():
 
 @app.route('/feedback', methods=['POST'])
 @login_required
+@csrf.exempt # Aggiungi questo decoratore per escludere la protezione CSRF anche per questa rotta
 def submit_feedback():
     data = request.get_json()
     prediction_id = data.get('prediction_id')
@@ -244,10 +286,17 @@ def submit_feedback():
             {'_id': ObjectId(prediction_id), 'user_id': current_user.id},
             {'$set': update_fields}
         )
-
-        if result.matched_count == 0:
-            return jsonify({'error': 'Predizione non trovata o non autorizzata.'}), 404
         
+        # Controlla se la modifica è stata effettivamente applicata
+        if result.modified_count == 0:
+            # Questo può succedere se l'ID non è valido o la predizione non appartiene all'utente
+            # Se la predizione non è stata trovata e l'utente non è autorizzato, restituisci un errore 404
+            if predictions_collection.find_one({'_id': ObjectId(prediction_id), 'user_id': current_user.id}) is None:
+                return jsonify({'error': 'Predizione non trovata o non autorizzata.'}), 404
+            else:
+                # La predizione è stata trovata ma non è stata modificata (e.g., feedback già presente)
+                return jsonify({'message': 'Feedback già presente, nessuna modifica apportata.'}), 200
+
         return jsonify({'message': 'Feedback ricevuto e salvato con successo.'}), 200
 
     except Exception as e:
@@ -290,9 +339,9 @@ def dashboard():
             class_counts[p['class']] += 1
 
     return render_template('dashboard.html', 
-                           predictions=predictions, 
-                           class_counts=class_counts,
-                           class_names=CLASS_NAMES)
+                            predictions=predictions, 
+                            class_counts=class_counts,
+                            class_names=CLASS_NAMES)
 
 if __name__ == '__main__':
     app.run(debug=True, host='127.0.0.1', port=5000)
