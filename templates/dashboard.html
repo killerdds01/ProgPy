@@ -38,6 +38,52 @@
     <div class="flex-grow p-6 sm:p-8 md:p-10">
         <div class="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-6 sm:p-8 md:p-10">
             <h1 class="text-4xl font-extrabold mb-8 text-center text-indigo-700">Smart Waste Dashboard</h1>
+            
+            <!-- Sezione Filtri -->
+            <div class="mb-10 p-6 bg-gray-100 rounded-lg shadow-inner">
+                <h2 class="text-2xl font-bold mb-4 text-gray-800">Filtra Predizioni</h2>
+                <form method="GET" action="{{ url_for('dashboard') }}" class="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+                    <!-- Filtro per classe -->
+                    <div>
+                        <label for="class_filter" class="block text-gray-700 font-bold mb-2">Classe:</label>
+                        <select id="class_filter" name="class" class="shadow border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">Tutte le classi</option>
+                            {% for class_name in class_names %}
+                                <option value="{{ class_name }}" {% if request.args.get('class') == class_name %}selected{% endif %}>{{ class_name|capitalize }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Filtro per feedback -->
+                    <div>
+                        <label for="feedback_filter" class="block text-gray-700 font-bold mb-2">Feedback:</label>
+                        <select id="feedback_filter" name="feedback" class="shadow border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">Tutti</option>
+                            <option value="correct" {% if request.args.get('feedback') == 'correct' %}selected{% endif %}>Corretto</option>
+                            <option value="incorrect" {% if request.args.get('feedback') == 'incorrect' %}selected{% endif %}>Sbagliato</option>
+                        </select>
+                    </div>
+
+                    <!-- Filtro per data di inizio -->
+                    <div>
+                        <label for="start_date_filter" class="block text-gray-700 font-bold mb-2">Data Inizio:</label>
+                        <input type="date" id="start_date_filter" name="start_date" value="{{ request.args.get('start_date') }}" class="shadow border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    
+                    <!-- Filtro per data di fine -->
+                    <div class="md:col-span-2">
+                        <label for="end_date_filter" class="block text-gray-700 font-bold mb-2">Data Fine:</label>
+                        <input type="date" id="end_date_filter" name="end_date" value="{{ request.args.get('end_date') }}" class="shadow border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <!-- Pulsante di filtraggio -->
+                    <div class="md:col-span-3">
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 ease-in-out">
+                            Applica Filtri
+                        </button>
+                    </div>
+                </form>
+            </div>
 
             <!-- Sezione Riepilogo delle Classificazioni -->
             <div class="mb-10">
@@ -61,6 +107,7 @@
                             <tr>
                                 <th class="py-3 px-6 text-left text-sm font-medium uppercase tracking-wider rounded-tl-lg">Classe</th>
                                 <th class="py-3 px-6 text-left text-sm font-medium uppercase tracking-wider">Confidenza</th>
+                                <th class="py-3 px-6 text-left text-sm font-medium uppercase tracking-wider">Feedback</th>
                                 <th class="py-3 px-6 text-left text-sm font-medium uppercase tracking-wider">Data</th>
                                 <th class="py-3 px-6 text-left text-sm font-medium uppercase tracking-wider rounded-tr-lg">Nome Immagine</th>
                             </tr>
@@ -70,12 +117,21 @@
                             <tr class="table-row-hover">
                                 <td class="py-4 px-6 whitespace-nowrap capitalize">{{ prediction['class'] }}</td>
                                 <td class="py-4 px-6 whitespace-nowrap">{{ prediction['confidence'] }}</td>
+                                <td class="py-4 px-6 whitespace-nowrap">
+                                    {% if prediction.feedback == 'correct' %}
+                                        <span class="bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">Corretto</span>
+                                    {% elif prediction.feedback == 'incorrect' %}
+                                        <span class="bg-red-100 text-red-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">Sbagliato (era {{ prediction.correct_class_feedback|capitalize }})</span>
+                                    {% else %}
+                                        <span class="bg-gray-100 text-gray-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">Nessuno</span>
+                                    {% endif %}
+                                </td>
                                 <td class="py-4 px-6 whitespace-nowrap">{{ prediction['timestamp'].strftime('%d/%m/%Y %H:%M:%S') }}</td>
                                 <td class="py-4 px-6 whitespace-nowrap">{{ prediction['image_filename'] }}</td>
                             </tr>
                             {% else %}
                             <tr>
-                                <td colspan="4" class="py-4 px-6 text-center text-gray-500">Nessuna predizione trovata. Carica alcune immagini!</td>
+                                <td colspan="5" class="py-4 px-6 text-center text-gray-500">Nessuna predizione trovata per i filtri selezionati.</td>
                             </tr>
                             {% endfor %}
                         </tbody>
