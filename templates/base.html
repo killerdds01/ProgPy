@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{% block title %}Smart Waste{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col bg-grid">
+
+  <!-- NAVBAR -->
+  <header class="bg-gray-900/80 border-b border-gray-800">
+    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+      {% set has_pending = current_user.is_authenticated and session.get('pending_prediction_id') %}
+
+      <!-- Logo → landing -->
+      <a href="{{ url_for('landing') }}" class="flex items-center gap-2">
+        <span class="text-2xl">♻️</span>
+        <span class="text-xl font-semibold text-emerald-400">Smart Waste</span>
+      </a>
+
+      <nav class="flex items-center gap-6">
+        {% if current_user.is_authenticated %}
+          <a href="{{ url_for('app') }}" class="hover:text-emerald-300">Classifica</a>
+          <a href="{{ url_for('dashboard') }}" class="hover:text-emerald-300">Dashboard</a>
+          <a href="{{ url_for('logout') }}" class="hover:text-rose-300">Logout</a>
+        {% else %}
+          <a href="{{ url_for('login') }}" class="hover:text-emerald-300">Accedi</a>
+          <a href="{{ url_for('register') }}" class="hover:text-sky-300">Registrati</a>
+        {% endif %}
+      </nav>
+    </div>
+
+    {% set show_pending_banner = current_user.is_authenticated
+                                 and session.get('pending_prediction_id')
+                                 and request.endpoint in ['app','dashboard'] %}
+    {% if show_pending_banner %}
+      <div class="bg-amber-900/40 text-amber-200 text-sm">
+        <div class="max-w-7xl mx-auto px-4 py-2">
+          ⚠️ Hai una predizione in attesa di conferma.
+          Confermala dalla <a href="{{ url_for('app') }}" class="underline">pagina di classificazione</a>.
+        </div>
+      </div>
+    {% endif %}
+  </header>
+
+  <!-- FLASH MESSAGES -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="max-w-7xl mx-auto px-4 w-full mt-4 space-y-2">
+        {% for category, message in messages %}
+          <div class="rounded-lg px-4 py-3 border text-sm
+            {% if category == 'success' %}bg-emerald-900/70 border-emerald-800 text-emerald-100{% elif category == 'error' %}bg-rose-900/70 border-rose-800 text-rose-100{% else %}bg-sky-900/70 border-sky-800 text-sky-100{% endif %}">
+            {{ message }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <!-- MAIN -->
+  <main class="flex-1">
+    <div class="max-w-7xl mx-auto px-4 py-8">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <footer class="border-t border-gray-800 py-6 text-center text-sm text-gray-400">
+    © {{ now().year }} Smart Waste — tecnologia per la raccolta intelligente
+  </footer>
+</body>
+</html>

@@ -1,142 +1,237 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Smart Waste</title>
-    <!-- Inclusione di Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Personalizzazione del tema Tailwind -->
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                    },
-                }
-            }
-        }
-    </script>
-</head>
-<body class="bg-gray-100 font-sans antialiased min-h-screen flex flex-col">
+{% extends "base.html" %}
+{% block title %}Dashboard · Smart Waste{% endblock %}
 
-    <!-- Navigazione Superiore -->
-    <nav class="bg-white shadow-md p-4">
-        <div class="container mx-auto flex justify-between items-center">
-            <a href="{{ url_for('home') }}" class="text-2xl font-bold text-gray-800">Smart Waste</a>
-            <div class="flex items-center space-x-4">
-                <span class="text-gray-600">Ciao, {{ current_user.username }}!</span>
-                <a href="{{ url_for('home') }}" class="text-blue-500 hover:text-blue-700">Home</a>
-                <a href="{{ url_for('dashboard') }}" class="text-blue-500 hover:text-blue-700">Dashboard</a>
-                <a href="{{ url_for('logout') }}" class="text-red-500 hover:text-red-700">Logout</a>
-            </div>
-        </div>
-    </nav>
+{% block content %}
+<div class="space-y-6">
 
-    <!-- Contenuto Principale della Dashboard -->
-    <div class="flex-grow container mx-auto p-6 mt-4">
-        <h1 class="text-3xl font-bold text-gray-800 mb-6">Le tue predizioni</h1>
-
-        <!-- Riepilogo delle Classificazioni -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-            {% for class_name, count in class_counts.items() %}
-                <div class="bg-white p-6 rounded-lg shadow-md flex items-center justify-between">
-                    <div>
-                        <p class="text-gray-500 text-sm font-medium uppercase">{{ class_name }}</p>
-                        <p class="text-3xl font-semibold text-gray-800 mt-1">{{ count }}</p>
-                    </div>
-                </div>
-            {% endfor %}
-        </div>
-
-        <!-- Form per i Filtri -->
-        <div class="bg-white p-6 rounded-lg shadow-md mb-8">
-            <h2 class="text-xl font-semibold text-gray-800 mb-4">Filtra le predizioni</h2>
-            <form method="GET" action="{{ url_for('dashboard') }}" class="space-y-4 md:space-y-0 md:flex md:space-x-4 items-end">
-                <div class="flex-grow">
-                    <label for="class_filter" class="block text-sm font-medium text-gray-700">Classe</label>
-                    <select id="class_filter" name="class" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
-                        <option value="">Tutte</option>
-                        {% for class_name in class_names %}
-                            <option value="{{ class_name }}" {% if request.args.get('class') == class_name %}selected{% endif %}>{{ class_name|capitalize }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="flex-grow">
-                    <label for="feedback_filter" class="block text-sm font-medium text-gray-700">Feedback</label>
-                    <select id="feedback_filter" name="feedback" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
-                        <option value="">Tutti</option>
-                        <option value="correct" {% if request.args.get('feedback') == 'correct' %}selected{% endif %}>Corretto</option>
-                        <option value="incorrect" {% if request.args.get('feedback') == 'incorrect' %}selected{% endif %}>Errato</option>
-                        <option value="none" {% if request.args.get('feedback') == 'none' %}selected{% endif %}>Nessun Feedback</option>
-                    </select>
-                </div>
-                <div class="flex-grow">
-                    <label for="start_date" class="block text-sm font-medium text-gray-700">Data Inizio</label>
-                    <input type="date" id="start_date" name="start_date" value="{{ request.args.get('start_date') }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
-                </div>
-                <div class="flex-grow">
-                    <label for="end_date" class="block text-sm font-medium text-gray-700">Data Fine</label>
-                    <input type="date" id="end_date" name="end_date" value="{{ request.args.get('end_date') }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
-                </div>
-                <button type="submit" class="w-full md:w-auto px-4 py-2 bg-blue-500 text-white font-semibold rounded-md shadow-sm hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                    Filtra
-                </button>
-            </form>
-        </div>
-
-        <!-- Tabella delle Predizioni -->
-        <div class="bg-white p-6 rounded-lg shadow-md">
-            <h2 class="text-xl font-semibold text-gray-800 mb-4">Elenco predizioni</h2>
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immagine</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Classe Predetta</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidenza</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data e Ora</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feedback</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Classe Corretta</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        {% for prediction in predictions %}
-                            <tr>
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <img src="{{ url_for('uploaded_file', filename=prediction.image_filename) }}" alt="Immagine {{ prediction.class }}" class="h-16 w-16 object-cover rounded-md">
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ prediction.class|capitalize }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ prediction.confidence }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ prediction.timestamp.strftime('%d/%m/%Y %H:%M') }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {% if prediction.feedback == 'correct' %}
-                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Corretto</span>
-                                    {% elif prediction.feedback == 'incorrect' %}
-                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Errato</span>
-                                    {% else %}
-                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">Nessuno</span>
-                                    {% endif %}
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                    {% if prediction.correct_class_feedback %}
-                                        {{ prediction.correct_class_feedback|capitalize }}
-                                    {% else %}
-                                        -
-                                    {% endif %}
-                                </td>
-                            </tr>
-                        {% else %}
-                            <tr>
-                                <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">Nessuna predizione trovata per i filtri selezionati.</td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+  <!-- FILTRI -->
+  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl p-4">
+    <h2 class="text-lg font-semibold text-emerald-300 mb-3">Filtri</h2>
+    <div class="grid sm:grid-cols-2 md:grid-cols-6 gap-3">
+      <div>
+        <label class="block text-sm text-gray-300">Data da</label>
+        <input type="date" id="filter-date-from" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-300">Data a</label>
+        <input type="date" id="filter-date-to" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-300">Classe</label>
+        <select id="filter-class" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
+          <option value="">Tutte</option>
+          {% for cname in class_names %}
+            <option value="{{ cname }}">{{ cname|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm text-gray-300">Feedback</label>
+        <select id="filter-feedback" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
+          <option value="">Tutti</option>
+          <option value="correct">Corretto</option>
+          <option value="incorrect">Errato</option>
+          <option value="pending">Da confermare</option>
+        </select>
+      </div>
+      <div class="flex items-end gap-2">
+        <button id="btn-apply-filters" class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm">Applica</button>
+        <button id="btn-reset-filters" class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-sm">Reset</button>
+      </div>
+      <div class="flex items-end gap-2 justify-end">
+        <label class="text-sm text-gray-300">Righe/pagina</label>
+        <select id="rows-per-page" class="bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
+          <option>5</option><option selected>10</option><option>20</option><option>50</option>
+        </select>
+      </div>
     </div>
+  </div>
 
-</body>
-</html>
+  <!-- KPI -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+    {% for cname, count in class_counts.items() %}
+      <div class="bg-gray-900/70 border border-gray-800 rounded-xl p-4 card-hover">
+        <div class="text-xs uppercase text-gray-400">{{ cname }}</div>
+        <div class="text-2xl font-semibold text-emerald-300 mt-1">{{ count }}</div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- TABELLA -->
+  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl overflow-x-auto">
+    <table id="predictions-table" class="min-w-full text-sm">
+      <thead class="bg-gray-900">
+        <tr class="text-left text-gray-400">
+          <th class="px-4 py-3">Data</th>
+          <th class="px-4 py-3">Immagine</th>
+          <th class="px-4 py-3">Classe</th>
+          <th class="px-4 py-3">Confidenza</th>
+          <th class="px-4 py-3">Feedback</th>
+          <th class="px-4 py-3">Classe corretta</th>
+          {% if pending_exists %}<th class="px-4 py-3">Conferma</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for pred in predictions %}
+          {% set is_pending = (not pred.feedback) %}
+          <tr class="border-t border-gray-800 hover:bg-gray-900/40 {% if is_pending %}pending-feedback{% endif %}"
+              data-pred-id="{{ pred._id }}"
+              data-class="{{ pred.class }}"
+              data-feedback="{{ pred.feedback if pred.feedback else 'pending' }}"
+              data-date="{{ pred.timestamp.strftime('%Y-%m-%d') if pred.timestamp else '' }}">
+            <td class="px-4 py-3 text-gray-300">{{ pred.timestamp.strftime('%d/%m/%Y %H:%M') if pred.timestamp else '' }}</td>
+            <td class="px-4 py-3">
+              {% if pred.image_filename %}
+                <img src="{{ url_for('uploaded_file', filename=pred.image_filename) }}" class="h-16 w-16 object-cover rounded-md border border-gray-800" />
+              {% else %}<span class="text-gray-500">—</span>{% endif %}
+            </td>
+            <td class="px-4 py-3 font-medium text-gray-100">{{ pred.class|capitalize }}</td>
+            <td class="px-4 py-3 text-gray-300">
+              {% if pred.confidence is number %}{{ (pred.confidence * 100)|round(2) }}%{% else %}{{ pred.confidence }}{% endif %}
+            </td>
+            <td class="px-4 py-3">
+              {% if pred.feedback == 'correct' %}
+                <span class="px-2 py-1 rounded-md text-xs bg-emerald-800/60 text-emerald-200 border border-emerald-700">Corretto</span>
+              {% elif pred.feedback == 'incorrect' %}
+                <span class="px-2 py-1 rounded-md text-xs bg-rose-800/60 text-rose-200 border border-rose-700">Errato</span>
+              {% else %}
+                <span class="px-2 py-1 rounded-md text-xs bg-amber-800/40 text-amber-200 border border-amber-700">Da confermare</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-3 text-gray-300">
+              {{ pred.correct_class_feedback|capitalize if pred.correct_class_feedback else '—' }}
+            </td>
+
+            {% if pending_exists %}
+              <td class="px-4 py-3">
+                {% if not pred.feedback %}
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button class="btn-confirm-correct px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs btn-pulse">Conferma corretto</button>
+                    <select class="sel-correct-class bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
+                      <option value="">Classe corretta…</option>
+                      {% for c in class_names %}
+                        <option value="{{ c }}">{{ c|capitalize }}</option>
+                      {% endfor %}
+                    </select>
+                    <button class="btn-confirm-incorrect px-3 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs">Segna errato</button>
+                  </div>
+                {% else %}
+                  <span class="text-gray-500">—</span>
+                {% endif %}
+              </td>
+            {% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">Nessuna predizione trovata.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- PAGINAZIONE -->
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div id="page-info" class="text-sm text-gray-400">Pagina 1 di 1</div>
+    <div class="flex items-center gap-2">
+      <button id="btn-prev" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-gray-200 disabled:opacity-50">‹ Prec</button>
+      <button id="btn-next" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-gray-200 disabled:opacity-50">Succ ›</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // --- Filtri + paginazione client-side ---
+  const tbody = document.querySelector('#predictions-table tbody');
+  const rowsAll = Array.from(tbody.querySelectorAll('tr[data-pred-id]'));
+  const pageInfo = document.getElementById('page-info');
+  const rowsPerSelect = document.getElementById('rows-per-page');
+  const btnPrev = document.getElementById('btn-prev');
+  const btnNext = document.getElementById('btn-next');
+
+  let filtered = rowsAll.slice();
+  let page = 1;
+
+  function applyFilters() {
+    const from = document.getElementById('filter-date-from').value;
+    const to = document.getElementById('filter-date-to').value;
+    const cls = document.getElementById('filter-class').value;
+    const fb = document.getElementById('filter-feedback').value;
+
+    filtered = rowsAll.filter(row => {
+      const rDate = row.dataset.date || '';
+      const rClass = row.dataset.class || '';
+      const rFb = row.dataset.feedback || '';
+      if (from && rDate < from) return false;
+      if (to && rDate > to) return false;
+      if (cls && rClass !== cls) return false;
+      if (fb && rFb !== fb) return false;
+      return true;
+    });
+    page = 1;
+    renderPage();
+  }
+
+  function renderPage() {
+    const perPage = parseInt(rowsPerSelect.value, 10) || 10;
+    const total = filtered.length;
+    const pages = Math.max(1, Math.ceil(total / perPage));
+    if (page > pages) page = pages;
+
+    // nascondi tutto, poi mostra solo lo slice
+    rowsAll.forEach(r => r.style.display = 'none');
+    const start = (page - 1) * perPage;
+    const end = start + perPage;
+    filtered.slice(start, end).forEach(r => r.style.display = '');
+
+    pageInfo.textContent = `Pagina ${page} di ${pages} (righe: ${total})`;
+    btnPrev.disabled = (page <= 1);
+    btnNext.disabled = (page >= pages);
+  }
+
+  document.getElementById('btn-apply-filters').addEventListener('click', applyFilters);
+  document.getElementById('btn-reset-filters').addEventListener('click', () => {
+    ['filter-date-from','filter-date-to','filter-class','filter-feedback'].forEach(id => document.getElementById(id).value = '');
+    applyFilters();
+  });
+  rowsPerSelect.addEventListener('change', renderPage);
+  btnPrev.addEventListener('click', () => { page = Math.max(1, page - 1); renderPage(); });
+  btnNext.addEventListener('click', () => { page = page + 1; renderPage(); });
+
+  // Inizializza
+  applyFilters();
+
+  // --- Feedback da tabella (uguale a prima) ---
+  function getCookie(name) { const v = `; ${document.cookie}`; const p = v.split(`; ${name}=`); if (p.length === 2) return decodeURIComponent(p.pop().split(';').shift()); }
+  const CSRF_TOKEN = getCookie('csrf_token');
+
+  async function sendFeedback(predictionId, type, correctClass=null) {
+    const res = await fetch('/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'X-CSRFToken': CSRF_TOKEN || '' },
+      body: JSON.stringify({ prediction_id: predictionId, feedback_type: type, correct_class: correctClass })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Errore salvataggio feedback');
+    return data;
+  }
+
+  document.querySelectorAll('tbody tr[data-pred-id]').forEach(row => {
+    const predId = row.getAttribute('data-pred-id');
+    const btnOk = row.querySelector('.btn-confirm-correct');
+    const btnNo = row.querySelector('.btn-confirm-incorrect');
+    const sel = row.querySelector('.sel-correct-class');
+    if (btnOk) {
+      btnOk.addEventListener('click', async () => {
+        try { btnOk.disabled = true; await sendFeedback(predId, 'correct'); location.reload(); }
+        catch(e){ btnOk.disabled = false; alert(e.message); }
+      });
+    }
+    if (btnNo) {
+      btnNo.addEventListener('click', async () => {
+        if (!sel || !sel.value) { alert('Seleziona la classe corretta.'); return; }
+        try { btnNo.disabled = true; await sendFeedback(predId, 'incorrect', sel.value); location.reload(); }
+        catch(e){ btnNo.disabled = false; alert(e.message); }
+      });
+    }
+  });
+</script>
+{% endblock %}

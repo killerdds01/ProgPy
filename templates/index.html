@@ -1,364 +1,296 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Waste Classifier</title>
-    <!-- Caricamento di Tailwind CSS per uno stile moderno e reattivo -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Utilizzo del font Inter, coerente con lo stile di Tailwind -->
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
-    <style>
-        /* Stili personalizzati per il font Inter */
-        body {
-            font-family: 'Inter', sans-serif;
-        }
+{% extends "base.html" %}
+{% block title %}Classifica · Smart Waste{% endblock %}
 
-        /* Classe per l'animazione di dissolvenza dei messaggi */
-        .fade-out {
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.5s ease-out, visibility 0.5s ease-out;
-        }
+{% block content %}
+<div class="max-w-3xl mx-auto grid gap-6">
 
-        /* Stile per posizionare i messaggi flash in modo fisso e non causare salti nel layout */
-        .flash-message {
-            position: fixed;
-            top: 5rem;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 500px;
-            z-index: 100;
-        }
-    </style>
-</head>
-<body class="bg-gray-100 flex flex-col min-h-screen">
+  <!-- Card Upload -->
+  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl p-6 shadow-xl">
+    <h2 class="text-xl font-semibold text-emerald-400">Classifica un rifiuto</h2>
+    <p class="text-gray-400 mt-1">Carica un'immagine e conferma il risultato per migliorare il modello.</p>
 
-    <!-- Navbar per la navigazione del sito -->
-    <nav class="bg-indigo-800 p-4 text-white shadow-lg">
-        <div class="container mx-auto flex justify-between items-center">
-            <a href="{{ url_for('home') }}" class="text-2xl font-bold">Smart Waste</a>
-            <div>
-                <!-- Gestione della visualizzazione dei link in base allo stato di autenticazione -->
-                {% if current_user.is_authenticated %}
-                    <span class="mr-4">Benvenuto, {{ current_user.username }}!</span>
-                    <a href="{{ url_for('dashboard') }}" class="hover:text-indigo-200 mr-4">Dashboard</a>
-                    <a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition duration-300">Logout</a>
-                {% else %}
-                    <a href="{{ url_for('login') }}" class="hover:text-indigo-200 mr-4">Login</a>
-                    <a href="{{ url_for('register') }}" class="bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-lg transition duration-300">Registrati</a>
-                {% endif %}
-            </div>
+    <form id="uploadForm" method="post" enctype="multipart/form-data" class="mt-6 space-y-4">
+      {{ form.hidden_tag() }}
+
+      {% set has_session_pending = preload is not none %}
+
+      <div id="dropZone"
+           class="rounded-xl border-2 border-dashed border-emerald-700/60 p-8 text-center transition
+                  {% if has_session_pending %}opacity-50 pointer-events-none{% else %}hover:bg-gray-900 cursor-pointer{% endif %}">
+        <p class="text-gray-300">
+          Trascina qui un'immagine o <span class="underline">clicca</span> per selezionarla
+        </p>
+        <input id="fileInput" name="file" type="file" accept="image/*" class="hidden" {% if not has_session_pending %}required{% endif %}/>
+      </div>
+
+      <div id="previewWrap" class="{% if not has_session_pending %}hidden{% endif %}">
+        <img id="previewImg"
+             class="std-img mx-auto rounded-xl border border-gray-800 shadow-md"
+             alt="Anteprima"
+             {% if has_session_pending %}
+             src="{{ url_for('uploaded_file', filename=preload.img) }}"
+             {% endif %}/>
+      </div>
+
+      <button id="btnSubmit" type="submit"
+              class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition flex items-center justify-center gap-2"
+              {% if has_session_pending %}disabled{% endif %}>
+        Esegui classificazione
+        {% if session.get('pending_prediction_id') %}
+          <span id="pendingBadge" class="text-xs px-2 py-0.5 rounded bg-amber-600/70 border border-amber-500 text-amber-50">
+            in attesa conferma
+          </span>
+        {% endif %}
+      </button>
+
+      <div id="loading" class="hidden flex items-center gap-2 text-emerald-300">
+        <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"></path>
+        </svg>
+        <span>Analisi in corso…</span>
+      </div>
+    </form>
+  </div>
+
+  <!-- Card Risultato -->
+  <div id="resultBox" class="bg-gray-900/70 border border-gray-800 rounded-2xl p-6 shadow-xl {% if not has_session_pending %}hidden{% endif %}">
+    <h3 class="text-lg font-semibold text-emerald-300">Risultato</h3>
+
+    <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div class="bg-gray-800/60 rounded-lg p-4">
+        <div class="text-gray-400 text-xs uppercase">Classe</div>
+        <div id="predClass" class="text-xl font-semibold mt-1">
+          {% if has_session_pending %}{{ preload.cls }}{% endif %}
         </div>
-    </nav>
-
-    <!-- Contenitore per i messaggi flash gestiti da Flask -->
-    <div id="flash-messages-container" class="flash-message">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="p-4 rounded-lg text-white font-bold mb-2
-                        {% if category == 'success' %}bg-green-500{% endif %}
-                        {% if category == 'error' %}bg-red-500{% endif %}
-                        {% if category == 'info' %}bg-blue-500{% endif %}">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-    </div>
-    
-    <!-- Box per i messaggi di successo dinamici (non da Flask) -->
-    <div id="successBox" class="p-4 bg-green-100 text-green-700 rounded-lg hidden flash-message">
-        <p id="successMessage" class="font-semibold"></p>
-    </div>
-
-    <!-- Box per i messaggi di errore dinamici (non da Flask) -->
-    <div id="errorBox" class="p-4 bg-red-100 text-red-700 rounded-lg hidden flash-message">
-        <p id="errorMessage" class="font-semibold"></p>
-    </div>
-
-    <!-- Sezione principale dell'applicazione -->
-    <main class="flex-grow flex items-center justify-center p-6">
-        <div class="bg-white rounded-3xl shadow-2xl p-8 sm:p-12 md:p-16 text-center w-full max-w-2xl transform transition-all duration-300">
-            <h1 class="text-4xl sm:text-5xl font-extrabold text-indigo-800 mb-4">Smart Waste Classifier</h1>
-            <p class="text-gray-600 mb-8 text-lg">Carica un'immagine per scoprire come smaltire il tuo rifiuto.</p>
-
-            <!-- Mostra il form solo se l'utente è autenticato -->
-            {% if current_user.is_authenticated %}
-                <!-- Form per l'upload e la classificazione dell'immagine -->
-                <form id="predictionForm" enctype="multipart/form-data" class="space-y-6">
-                    <div class="flex items-center justify-center space-x-4">
-                        <label class="block">
-                            <span class="sr-only">Scegli File</span>
-                            <input type="file" id="fileInput" name="file" accept="image/*" class="block w-full text-sm text-gray-500
-                                file:mr-4 file:py-2 file:px-4
-                                file:rounded-full file:border-0
-                                file:text-sm file:font-semibold
-                                file:bg-indigo-50 file:text-indigo-700
-                                hover:file:bg-indigo-100 transition duration-300">
-                        </label>
-                    </div>
-                    <div>
-                        <button type="submit" id="submitBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-full transition duration-300 transform hover:scale-105">
-                            Classifica Rifiuto
-                        </button>
-                    </div>
-                </form>
-
-                <!-- Contenitore per mostrare il risultato della predizione -->
-                <div id="resultContainer" class="mt-8 p-6 bg-gray-50 rounded-2xl shadow-inner text-left hidden">
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4">Risultato</h2>
-                    <div class="space-y-2 mb-4">
-                        <p class="text-lg text-gray-700"><span class="font-semibold text-indigo-700">Classe:</span> <span id="predictedClass" class="capitalize"></span></p>
-                        <p class="text-lg text-gray-700"><span class="font-semibold text-indigo-700">Confidenza:</span> <span id="confidence"></span></p>
-                    </div>
-                    
-                    <!-- Sezione per il feedback utente -->
-                    <div id="feedbackSection">
-                        <p class="text-md text-gray-600 mb-2">Il risultato è corretto?</p>
-                        <div class="flex items-center space-x-4">
-                            <button id="correctBtn" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-5 rounded-full transition duration-300 transform hover:scale-105">
-                                Sì, corretto
-                            </button>
-                            <button id="incorrectBtn" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-5 rounded-full transition duration-300 transform hover:scale-105">
-                                No, sbagliato
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Sezione per la correzione, mostrata solo se il feedback è "sbagliato" -->
-                    <div id="correctionSection" class="mt-4 hidden">
-                        <p class="text-md text-gray-600 mb-2">Qual era la classe corretta?</p>
-                        <div class="flex items-center space-x-4">
-                            <select id="correctClassSelect" class="block w-full py-2 px-3 border border-gray-300 bg-white rounded-full shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                                <option value="">Seleziona...</option>
-                                <option value="plastica">Plastica</option>
-                                <option value="carta">Carta</option>
-                                <option value="vetro">Vetro</option>
-                                <option value="organico">Organico</option>
-                                <option value="indifferenziato">Indifferenziato</option>
-                            </select>
-                            <button id="submitCorrectionBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-full transition duration-300">
-                                Invia
-                            </button>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Spinner di caricamento, mostrato durante la classificazione -->
-                <div id="loading" class="mt-8 flex items-center justify-center hidden">
-                    <svg class="animate-spin -ml-1 mr-3 h-8 w-8 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span class="text-lg text-indigo-600">Classificazione in corso...</span>
-                </div>
-            {% else %}
-                <!-- Messaggio per utenti non autenticati -->
-                <p class="text-lg text-gray-600">Per classificare un rifiuto, per favore <a href="{{ url_for('login') }}" class="text-indigo-600 font-bold hover:underline">accedi</a> o <a href="{{ url_for('register') }}" class="text-indigo-600 font-bold hover:underline">registrati</a>.</p>
-            {% endif %}
-
+      </div>
+      <div class="bg-gray-800/60 rounded-lg p-4">
+        <div class="text-gray-400 text-xs uppercase">Confidenza</div>
+        <div id="predConf" class="text-xl font-semibold mt-1">
+          {% if has_session_pending %}{{ preload.conf }}{% endif %}
         </div>
-    </main>
+      </div>
+      <div class="bg-gray-800/60 rounded-lg p-4">
+        <div class="text-gray-400 text-xs uppercase">Immagine</div>
+        <img id="classifiedImg"
+             class="std-img mt-2 rounded-md border border-gray-700 mx-auto"
+             {% if has_session_pending %}
+             src="{{ url_for('uploaded_file', filename=preload.img) }}"
+             {% endif %}/>
+      </div>
+    </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Seleziona gli elementi del DOM
-            const flashContainer = document.getElementById('flash-messages-container');
-            const form = document.getElementById('predictionForm');
-            const fileInput = document.getElementById('fileInput');
-            const resultContainer = document.getElementById('resultContainer');
-            const predictedClass = document.getElementById('predictedClass');
-            const confidence = document.getElementById('confidence');
-            const loadingSpinner = document.getElementById('loading');
-            const errorBox = document.getElementById('errorBox');
-            const errorMessage = document.getElementById('errorMessage');
-            const successBox = document.getElementById('successBox');
-            const successMessage = document.getElementById('successMessage');
-            const feedbackSection = document.getElementById('feedbackSection');
-            const correctBtn = document.getElementById('correctBtn');
-            const incorrectBtn = document.getElementById('incorrectBtn');
-            const correctionSection = document.getElementById('correctionSection');
-            const correctClassSelect = document.getElementById('correctClassSelect');
-            const submitCorrectionBtn = document.getElementById('submitCorrectionBtn');
+    <!-- Linee guida smaltimento -->
+    <div id="guides" class="hidden mt-5 bg-gray-800/60 border border-gray-700 rounded-lg p-4">
+      <div class="text-gray-400 text-xs uppercase">Smaltimento consigliato</div>
+      <div id="guideContent" class="mt-2 text-gray-200 text-sm flex items-start gap-3"></div>
+    </div>
 
-            // Variabile per tenere traccia dell'ID della predizione corrente
-            let currentPredictionId = null;
+    <div class="mt-6">
+      <p class="text-gray-300 mb-2">Il risultato è corretto?</p>
 
-            // Logica per i messaggi flash iniziali (inclusi quelli di logout)
-            if (flashContainer) {
-                const flashMessages = flashContainer.querySelectorAll('div');
-                flashMessages.forEach(message => {
-                    setTimeout(() => {
-                        message.classList.add('fade-out');
-                    }, 3000);
-                    setTimeout(() => {
-                        message.remove();
-                    }, 3500);
-                });
-            }
+      <!-- WRAPPER AZIONI: sparisce dopo conferma -->
+      <div id="actionsRow" class="flex flex-wrap items-center gap-3">
+        <button id="btnOk" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">Sì, corretto</button>
+        <button id="btnNo" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">No, sbagliato</button>
 
-            // Aggiungi un controllo per assicurarti che il form esista prima di aggiungere l'event listener
-            if (form) {
-                form.addEventListener('submit', async function(e) {
-                    e.preventDefault();
-                    
-                    // Reset dell'interfaccia utente
-                    resultContainer.classList.add('hidden');
-                    errorBox.classList.add('hidden');
-                    successBox.classList.add('hidden');
-                    loadingSpinner.classList.remove('hidden');
+        <!-- Dropdown nascosto finché non si clicca "No" -->
+        <div id="corrWrap" class="hidden items-center gap-2">
+          <select id="corrClass"
+                  class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200">
+            <option value="">Scegli classe corretta…</option>
+            {% for c in class_names %}
+              <option value="{{ c }}">{{ c|capitalize }}</option>
+            {% endfor %}
+          </select>
+          <button id="btnSendCorr"
+                  class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm">
+            Invia
+          </button>
+        </div>
+      </div>
+    </div>
 
-                    const file = fileInput.files[0];
-                    if (!file) {
-                        displayError('Per favore, seleziona un file prima di classificare.');
-                        loadingSpinner.classList.add('hidden');
-                        return;
-                    }
+    <!-- messaggi locali -->
+    <div id="localMsg" class="mt-4 hidden rounded-lg px-4 py-3 text-sm border"></div>
+  </div>
+</div>
 
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    
-                    try {
-                        // Chiamata all'API per la predizione
-                        const response = await fetch('/predict', {
-                            method: 'POST',
-                            body: formData
-                        });
+{% if preload %}
+<script>
+  window.PENDING_PRELOAD = {
+    id: "{{ preload.id }}",
+    cls: "{{ preload.cls }}",
+    conf: "{{ preload.conf }}",
+    img: "{{ url_for('uploaded_file', filename=preload.img) }}"
+  };
+</script>
+{% endif %}
 
-                        loadingSpinner.classList.add('hidden');
-                        
-                        // Gestisce il caso in cui il server restituisce un HTML non JSON
-                        if (!response.headers.get('content-type').includes('application/json')) {
-                            displayError('Sessione scaduta o non autenticato. Per favore, effettua il login.');
-                            setTimeout(() => {
-                                window.location.href = "{{ url_for('login') }}";
-                            }, 3000);
-                            return;
-                        }
+<script>
+  const form = document.getElementById('uploadForm');
+  const csrfField = form.querySelector('input[name="csrf_token"]');
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const previewWrap = document.getElementById('previewWrap');
+  const previewImg = document.getElementById('previewImg');
+  const btnSubmit = document.getElementById('btnSubmit');
+  const pendingBadge = document.getElementById('pendingBadge');
+  const loading = document.getElementById('loading');
 
-                        const result = await response.json();
-                        
-                        if (response.ok) {
-                            // Visualizza i risultati della predizione
-                            predictedClass.textContent = result.class;
-                            
-                            // CORREZIONE: Gestisce il valore di confidenza come stringa numerica
-                            const confidenceValue = parseFloat(result.confidence);
-                            if (!isNaN(confidenceValue)) {
-                                confidence.textContent = `${(confidenceValue).toFixed(2)}%`;
-                            } else {
-                                // Se il valore non è un numero valido, mostra un messaggio di errore
-                                confidence.textContent = "Errore di calcolo";
-                            }
-                            
-                            currentPredictionId = result.prediction_id;
-                            resultContainer.classList.remove('hidden');
-                            feedbackSection.classList.remove('hidden');
-                            correctionSection.classList.add('hidden');
-                        } else {
-                            displayError(result.error || 'Errore sconosciuto durante la classificazione.');
-                        }
-                    } catch (error) {
-                        loadingSpinner.classList.add('hidden');
-                        displayError('Errore di connessione al server: ' + error.message);
-                    }
-                });
-            }
+  const resultBox = document.getElementById('resultBox');
+  const predClass = document.getElementById('predClass');
+  const predConf  = document.getElementById('predConf');
+  const classifiedImg = document.getElementById('classifiedImg');
 
-            // Gestione del feedback "corretto"
-            if (correctBtn) {
-                correctBtn.addEventListener('click', async function() {
-                    await submitFeedback('correct', null);
-                });
-            }
+  const guides = document.getElementById('guides');
+  const guideContent = document.getElementById('guideContent');
 
-            // Gestione del feedback "sbagliato", mostra la sezione di correzione
-            if (incorrectBtn) {
-                incorrectBtn.addEventListener('click', function() {
-                    feedbackSection.classList.add('hidden');
-                    correctionSection.classList.remove('hidden');
-                });
-            }
-            
-            // Gestione dell'invio della correzione manuale
-            if (submitCorrectionBtn) {
-                submitCorrectionBtn.addEventListener('click', async function() {
-                    const correctClass = correctClassSelect.value;
-                    if (!correctClass) {
-                        displayError('Per favore, seleziona una classe corretta.');
-                        return;
-                    }
-                    await submitFeedback('incorrect', correctClass);
-                });
-            }
+  const actionsRow = document.getElementById('actionsRow');
+  const btnOk = document.getElementById('btnOk');
+  const btnNo = document.getElementById('btnNo');
+  const corrWrap = document.getElementById('corrWrap');
+  const corrClass = document.getElementById('corrClass');
+  const btnSendCorr = document.getElementById('btnSendCorr');
+  const localMsg = document.getElementById('localMsg');
 
-            // Funzione asincrona per l'invio del feedback
-            async function submitFeedback(feedbackType, correctClass) {
-                if (!currentPredictionId) {
-                    displayError('Nessuna predizione attiva per inviare il feedback.');
-                    return;
-                }
-                
-                try {
-                    const response = await fetch('/feedback', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            prediction_id: currentPredictionId,
-                            feedback_type: feedbackType,
-                            correct_class: correctClass
-                        })
-                    });
-                    
-                    const result = await response.json();
-                    if (response.ok) {
-                        displaySuccess(result.message || 'Grazie per il tuo feedback!');
-                        // Nascondi le sezioni di feedback e correzione dopo l'invio
-                        feedbackSection.classList.add('hidden');
-                        correctionSection.classList.add('hidden');
-                    } else {
-                        displayError(result.error || 'Errore sconosciuto durante l\'invio del feedback.');
-                    }
-                } catch (error) {
-                    displayError('Errore di connessione al server: ' + error.message);
-                }
-            }
+  let currentPredictionId = null;
 
-            // Funzione per visualizzare i messaggi di errore
-            function displayError(message) {
-                errorBox.classList.remove('hidden');
-                errorMessage.textContent = message;
-                successBox.classList.add('hidden');
-                
-                setTimeout(() => {
-                    errorBox.classList.add('fade-out');
-                }, 5000);
-                setTimeout(() => {
-                    errorBox.classList.add('hidden');
-                    errorBox.classList.remove('fade-out');
-                }, 5500);
-            }
-            
-            // Funzione per visualizzare i messaggi di successo
-            function displaySuccess(message) {
-                successBox.classList.remove('hidden');
-                successMessage.textContent = message;
-                errorBox.classList.add('hidden');
-                
-                setTimeout(() => {
-                    successBox.classList.add('fade-out');
-                }, 3000);
-                setTimeout(() => {
-                    successBox.classList.add('hidden');
-                    successBox.classList.remove('fade-out');
-                }, 3500);
-            }
-        });
-    </script>
-</body>
-</html>
+  // Se ricaricato con pending in sessione, precompila e blocca upload
+  if (window.PENDING_PRELOAD) {
+    currentPredictionId = window.PENDING_PRELOAD.id;
+    predClass.textContent = window.PENDING_PRELOAD.cls;
+    predConf.textContent = window.PENDING_PRELOAD.conf;
+    classifiedImg.src = window.PENDING_PRELOAD.img;
+    resultBox.classList.remove('hidden');
+    showGuideFor(window.PENDING_PRELOAD.cls);
+    showLocal('Predizione in sospeso: conferma o correggi per proseguire.', 'info');
+  }
+
+  // Dropzone (attiva solo se non c'è pending)
+  if (!window.PENDING_PRELOAD) {
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('bg-gray-900'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('bg-gray-900'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault(); dropZone.classList.remove('bg-gray-900');
+      const f = e.dataTransfer.files[0];
+      if (f) { fileInput.files = e.dataTransfer.files; showPreview(f); }
+    });
+    fileInput.addEventListener('change', e => { if (e.target.files[0]) showPreview(e.target.files[0]); });
+  }
+
+  function showPreview(file){
+    const reader = new FileReader();
+    reader.onload = ev => { previewImg.src = ev.target.result; previewWrap.classList.remove('hidden'); };
+    reader.readAsDataURL(file);
+  }
+
+  // Mappa linee guida smaltimento
+  const DISPOSAL_GUIDES = {
+    'plastica': { icon:'🟡', label:'Plastica', bin:'Bidone giallo', note:'Rimuovi liquidi e schiaccia le bottiglie.' },
+    'carta': { icon:'🔵', label:'Carta', bin:'Bidone blu', note:'No carta unta/plastificata. Appiattisci le scatole.' },
+    'vetro': { icon:'🟢', label:'Vetro', bin:'Campana verde', note:'No ceramica/porcellana. Sciacqua i contenitori.' },
+    'organico': { icon:'🟤', label:'Organico', bin:'Marrone/umido', note:'Usa sacchetti compostabili. No liquidi.' },
+    'indifferenziato': { icon:'⚫', label:'Indifferenziato', bin:'Grigio/nero', note:'Solo rifiuti non riciclabili.' }
+  };
+  function showGuideFor(cls){
+    const g = DISPOSAL_GUIDES[cls];
+    if (!g) { guides.classList.add('hidden'); return; }
+    guideContent.innerHTML = `
+      <div class="shrink-0 text-xl">${g.icon}</div>
+      <div>
+        <div class="font-semibold">${g.label} → <span class="text-emerald-300">${g.bin}</span></div>
+        <div class="text-gray-300 text-sm mt-1">${g.note}</div>
+      </div>
+    `;
+    guides.classList.remove('hidden');
+  }
+
+  // Predict
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (window.PENDING_PRELOAD) return; // safety
+    toggleLoading(true);
+    showLocal('', 'info', true);
+
+    try {
+      const fd = new FormData(form);
+      const res = await fetch('/predict', { method:'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Errore sconosciuto');
+
+      predClass.textContent = data.class;
+      predConf.textContent = data.confidence;
+      currentPredictionId = data.prediction_id;
+      classifiedImg.src = previewImg.src;
+
+      resultBox.classList.remove('hidden');
+      showGuideFor(data.class);
+      showLocal('Predizione eseguita. Conferma il risultato.', 'success');
+
+      // blocca upload finché non confermi
+      dropZone.classList.add('opacity-50','pointer-events-none');
+      fileInput.disabled = true;
+      btnSubmit.disabled = true;
+      if (pendingBadge) { pendingBadge.style.display = ''; }
+    } catch (err) {
+      showLocal(err.message, 'error');
+    } finally {
+      toggleLoading(false);
+    }
+  });
+
+  // Feedback
+  btnOk.addEventListener('click', () => sendFeedback('correct'));
+  btnNo.addEventListener('click', () => { corrWrap.classList.remove('hidden'); });
+
+  btnSendCorr.addEventListener('click', () => {
+    if (!corrClass.value) { showLocal('Seleziona la classe corretta.', 'error'); return; }
+    sendFeedback('incorrect', corrClass.value);
+  });
+
+  async function sendFeedback(type, correctClass=null){
+    const id = currentPredictionId || (window.PENDING_PRELOAD && window.PENDING_PRELOAD.id);
+    if (!id) return;
+    try{
+      const res = await fetch('/feedback', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-CSRFToken': csrfField.value },
+        body: JSON.stringify({ prediction_id: id, feedback_type: type, correct_class: correctClass })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Errore invio feedback');
+
+      showLocal('Feedback salvato! Grazie 🙌', 'success');
+
+      // sblocca upload e nascondi azioni
+      actionsRow.classList.add('hidden');
+      dropZone.classList.remove('opacity-50','pointer-events-none');
+      fileInput.disabled = false;
+      btnSubmit.disabled = false;
+
+      if (pendingBadge) { pendingBadge.style.display = 'none'; }
+      // reset preload
+      window.PENDING_PRELOAD = null;
+      currentPredictionId = null;
+    }catch(err){
+      showLocal(err.message, 'error');
+    }
+  }
+
+  function toggleLoading(state){
+    loading.classList.toggle('hidden', !state);
+    btnSubmit.disabled = state;
+  }
+  function showLocal(msg, type='info', hide=false){
+    if (hide) { localMsg.classList.add('hidden'); return; }
+    localMsg.textContent = msg;
+    localMsg.className = 'mt-4 rounded-lg px-4 py-3 text-sm border ' +
+      (type==='success' ? 'bg-emerald-900/70 border-emerald-800 text-emerald-100' :
+       type==='error'   ? 'bg-rose-900/70 border-rose-800 text-rose-100' :
+                          'bg-sky-900/70 border-sky-800 text-sky-100');
+    localMsg.classList.remove('hidden');
+  }
+</script>
+{% endblock %}
