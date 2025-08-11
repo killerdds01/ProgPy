@@ -1,4 +1,5 @@
 # --- Moduli standard ---
+import json
 import os
 import uuid
 import datetime
@@ -25,7 +26,7 @@ from wtforms.validators import DataRequired
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 # --- MongoDB ---
 from pymongo import MongoClient
@@ -37,6 +38,9 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'DEV_KEY_CHANGE_ME')
+
+# Limite dimensione upload (facoltativo): 10MB
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 # Cookie & session policy
 app.config.update(
@@ -107,11 +111,24 @@ MODEL_PATH = 'best_model_finetuned_light.pth'
 model = models.resnet18(weights=None)
 model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
 
-# torch.load con weights_only=True (PyTorch >= 2.4).
-# Se usi una versione più vecchia e ti dà errore, cambia in:
-# state = torch.load(MODEL_PATH, map_location=device)
-state = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+# torch.load sicuro con fallback
+try:
+    state = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+except TypeError:
+    # Per versioni PyTorch < 2.4
+    state = torch.load(MODEL_PATH, map_location=device)
 model.load_state_dict(state)
+
+# Temperature scaling (se presente)
+TEMPERATURE = 1.0
+try:
+    with open('calibration.json', 'r') as f:
+        CALIB = json.load(f)
+        TEMPERATURE = float(CALIB.get('temperature', 1.0))
+    print(f"Temperature scaling attivo: T={TEMPERATURE}")
+except Exception:
+    print("Nessuna calibrazione trovata. Uso T=1.0")
+
 model.to(device)
 model.eval()
 
@@ -140,7 +157,6 @@ def idle_logout():
 
 # Blocca la navigazione con predizione pendente
 # → CONSENTE solo: app, predict, feedback, upload file, auth, static.
-# Dashboard e landing vengono bloccate finché non confermi.
 @app.before_request
 def force_feedback_before_navigation():
     if not current_user.is_authenticated:
@@ -165,10 +181,9 @@ def inject_now():
 
 
 # ============== Routes ==============
-# Landing: sempre visibile (ma se c'è pending, il middleware sopra bloccherà)
 @app.route('/')
 def landing():
-    # Se loggato, mostra un eventuale avviso su predizioni pendenti "storiche"
+    # Avviso di eventuali vecchie pending se non c'è una pending in sessione
     pending_count = 0
     if current_user.is_authenticated and not session.get('pending_prediction_id'):
         pending_count = predictions_collection.count_documents({
@@ -177,13 +192,11 @@ def landing():
         })
     return render_template('landing.html', pending_count=pending_count)
 
-# Pagina di classificazione (ex index) — endpoint "app"
 @app.route('/app', endpoint='app')
 @login_required
 def classify():
     form = UploadForm()
     preload = None
-    # Se c'è una pending in questa sessione, precarico immagine/valori nel template
     pending_id = session.get('pending_prediction_id')
     if pending_id:
         doc = predictions_collection.find_one({
@@ -250,12 +263,10 @@ def dashboard():
     query = {'user_id': current_user.id}
     predictions = list(predictions_collection.find(query).sort('timestamp', -1))
     class_counts = {c: 0 for c in CLASS_NAMES}
-    pending_exists = False
+    pending_exists = any(p.get('feedback') is None for p in predictions)
     for p in predictions:
         if 'class' in p:
             class_counts[p['class']] += 1
-        if not p.get('feedback'):
-            pending_exists = True
     return render_template(
         'dashboard.html',
         predictions=predictions,
@@ -273,12 +284,23 @@ def predict():
     file = request.files['file']
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
-    file.save(filepath)
 
-    img = Image.open(filepath).convert('RGB')
+    try:
+        file.save(filepath)
+        # Validazione base immagine
+        Image.open(filepath).verify()
+        img = Image.open(filepath).convert('RGB')
+    except (UnidentifiedImageError, OSError):
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        return jsonify({'error': 'File non valido o danneggiato.'}), 400
+
     input_tensor = transform(img).unsqueeze(0).to(device)
     with torch.no_grad():
         output = model(input_tensor)
+        # ---- Calibrazione confidenza ----
+        if TEMPERATURE and TEMPERATURE != 1.0:
+            output = output / TEMPERATURE
         probabilities = torch.nn.functional.softmax(output[0], dim=0)
         predicted_prob, predicted_idx = torch.max(probabilities, 0)
         predicted_class = CLASS_NAMES[predicted_idx.item()]
@@ -301,10 +323,12 @@ def predict():
         'prediction_id': str(inserted_id)
     })
 
+# ---- FEEDBACK: esente da CSRF ----
 @app.route('/feedback', methods=['POST'])
 @login_required
+@csrf.exempt
 def submit_feedback():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     prediction_id = data.get('prediction_id')
     feedback_type = data.get('feedback_type')
     correct_class = data.get('correct_class')
@@ -326,7 +350,6 @@ def submit_feedback():
     if result.matched_count == 0:
         return jsonify({'error': 'Predizione non trovata.'}), 404
 
-    # se questa era la pending, elimina il blocco
     if session.get('pending_prediction_id') == prediction_id:
         session.pop('pending_prediction_id', None)
 
@@ -335,7 +358,6 @@ def submit_feedback():
 @app.route('/uploads/<filename>')
 @login_required
 def uploaded_file(filename):
-    # Sicurezza: serviamo solo file appartenenti all'utente
     pred = predictions_collection.find_one({'image_filename': filename, 'user_id': current_user.id})
     if not pred:
         abort(403)

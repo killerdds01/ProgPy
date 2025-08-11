@@ -89,12 +89,12 @@
     <div class="mt-6">
       <p class="text-gray-300 mb-2">Il risultato è corretto?</p>
 
-      <!-- WRAPPER AZIONI: sparisce dopo conferma -->
-      <div id="actionsRow" class="flex flex-wrap items-center gap-3">
-        <button id="btnOk" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">Sì, corretto</button>
-        <button id="btnNo" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">No, sbagliato</button>
+      <!-- WRAPPER AZIONI (event delegation qui) -->
+      <div id="actionsRow" class="flex flex-wrap items-center gap-3 pointer-events-auto z-10 relative">
+        <button id="btnOk" type="button" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">Sì, corretto</button>
+        <button id="btnNo" type="button" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">No, sbagliato</button>
 
-        <!-- Dropdown nascosto finché non si clicca "No" -->
+        <!-- Dropdown mostrato dopo "No" -->
         <div id="corrWrap" class="hidden items-center gap-2">
           <select id="corrClass"
                   class="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200">
@@ -103,7 +103,7 @@
               <option value="{{ c }}">{{ c|capitalize }}</option>
             {% endfor %}
           </select>
-          <button id="btnSendCorr"
+          <button id="btnSendCorr" type="button"
                   class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm">
             Invia
           </button>
@@ -128,8 +128,32 @@
 {% endif %}
 
 <script>
+(() => {
+  // === 1) Mappa e funzione: PRIMA di ogni uso ===
+  const DISPOSAL_GUIDES = {
+    'plastica': { icon:'🟡', label:'Plastica', bin:'Bidone giallo', note:'Rimuovi liquidi e schiaccia le bottiglie.' },
+    'carta': { icon:'🔵', label:'Carta', bin:'Bidone blu', note:'No carta unta/plastificata. Appiattisci le scatole.' },
+    'vetro': { icon:'🟢', label:'Vetro', bin:'Campana verde', note:'No ceramica/porcellana. Sciacqua i contenitori.' },
+    'organico': { icon:'🟤', label:'Organico', bin:'Marrone/umido', note:'Usa sacchetti compostabili. No liquidi.' },
+    'indifferenziato': { icon:'⚫', label:'Indifferenziato', bin:'Grigio/nero', note:'Solo rifiuti non riciclabili.' }
+  };
+  function showGuideFor(cls){
+    const g = DISPOSAL_GUIDES[cls];
+    const guides = document.getElementById('guides');
+    const guideContent = document.getElementById('guideContent');
+    if (!g) { guides.classList.add('hidden'); return; }
+    guideContent.innerHTML = `
+      <div class="shrink-0 text-xl">${g.icon}</div>
+      <div>
+        <div class="font-semibold">${g.label} → <span class="text-emerald-300">${g.bin}</span></div>
+        <div class="text-gray-300 text-sm mt-1">${g.note}</div>
+      </div>
+    `;
+    guides.classList.remove('hidden');
+  }
+
+  // === 2) Resto codice ===
   const form = document.getElementById('uploadForm');
-  const csrfField = form.querySelector('input[name="csrf_token"]');
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
   const previewWrap = document.getElementById('previewWrap');
@@ -143,28 +167,23 @@
   const predConf  = document.getElementById('predConf');
   const classifiedImg = document.getElementById('classifiedImg');
 
-  const guides = document.getElementById('guides');
-  const guideContent = document.getElementById('guideContent');
-
   const actionsRow = document.getElementById('actionsRow');
-  const btnOk = document.getElementById('btnOk');
-  const btnNo = document.getElementById('btnNo');
   const corrWrap = document.getElementById('corrWrap');
   const corrClass = document.getElementById('corrClass');
-  const btnSendCorr = document.getElementById('btnSendCorr');
   const localMsg = document.getElementById('localMsg');
 
   let currentPredictionId = null;
 
-  // Se ricaricato con pending in sessione, precompila e blocca upload
+  // Se ricarico con pending in sessione, precompilo e SCROLLO al risultato
   if (window.PENDING_PRELOAD) {
     currentPredictionId = window.PENDING_PRELOAD.id;
     predClass.textContent = window.PENDING_PRELOAD.cls;
-    predConf.textContent = window.PENDING_PRELOAD.conf;
-    classifiedImg.src = window.PENDING_PRELOAD.img;
+    predConf.textContent  = window.PENDING_PRELOAD.conf;
+    classifiedImg.src     = window.PENDING_PRELOAD.img;
     resultBox.classList.remove('hidden');
     showGuideFor(window.PENDING_PRELOAD.cls);
     showLocal('Predizione in sospeso: conferma o correggi per proseguire.', 'info');
+    setTimeout(() => { resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 80);
   }
 
   // Dropzone (attiva solo se non c'è pending)
@@ -186,27 +205,6 @@
     reader.readAsDataURL(file);
   }
 
-  // Mappa linee guida smaltimento
-  const DISPOSAL_GUIDES = {
-    'plastica': { icon:'🟡', label:'Plastica', bin:'Bidone giallo', note:'Rimuovi liquidi e schiaccia le bottiglie.' },
-    'carta': { icon:'🔵', label:'Carta', bin:'Bidone blu', note:'No carta unta/plastificata. Appiattisci le scatole.' },
-    'vetro': { icon:'🟢', label:'Vetro', bin:'Campana verde', note:'No ceramica/porcellana. Sciacqua i contenitori.' },
-    'organico': { icon:'🟤', label:'Organico', bin:'Marrone/umido', note:'Usa sacchetti compostabili. No liquidi.' },
-    'indifferenziato': { icon:'⚫', label:'Indifferenziato', bin:'Grigio/nero', note:'Solo rifiuti non riciclabili.' }
-  };
-  function showGuideFor(cls){
-    const g = DISPOSAL_GUIDES[cls];
-    if (!g) { guides.classList.add('hidden'); return; }
-    guideContent.innerHTML = `
-      <div class="shrink-0 text-xl">${g.icon}</div>
-      <div>
-        <div class="font-semibold">${g.label} → <span class="text-emerald-300">${g.bin}</span></div>
-        <div class="text-gray-300 text-sm mt-1">${g.note}</div>
-      </div>
-    `;
-    guides.classList.remove('hidden');
-  }
-
   // Predict
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -216,12 +214,12 @@
 
     try {
       const fd = new FormData(form);
-      const res = await fetch('/predict', { method:'POST', body: fd });
+      const res = await fetch('/predict', { method:'POST', body: fd, credentials: 'same-origin' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Errore sconosciuto');
 
       predClass.textContent = data.class;
-      predConf.textContent = data.confidence;
+      predConf.textContent  = data.confidence;
       currentPredictionId = data.prediction_id;
       classifiedImg.src = previewImg.src;
 
@@ -234,33 +232,44 @@
       fileInput.disabled = true;
       btnSubmit.disabled = true;
       if (pendingBadge) { pendingBadge.style.display = ''; }
+
+      setTimeout(() => { resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 80);
     } catch (err) {
+      console.error('Predict error:', err);
       showLocal(err.message, 'error');
     } finally {
       toggleLoading(false);
     }
   });
 
-  // Feedback
-  btnOk.addEventListener('click', () => sendFeedback('correct'));
-  btnNo.addEventListener('click', () => { corrWrap.classList.remove('hidden'); });
-
-  btnSendCorr.addEventListener('click', () => {
-    if (!corrClass.value) { showLocal('Seleziona la classe corretta.', 'error'); return; }
-    sendFeedback('incorrect', corrClass.value);
+  // === EVENT DELEGATION sui pulsanti di feedback ===
+  actionsRow.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t) return;
+    if (t.id === 'btnOk') {
+      sendFeedback('correct');
+    } else if (t.id === 'btnNo') {
+      corrWrap.classList.remove('hidden');
+    } else if (t.id === 'btnSendCorr') {
+      if (!corrClass.value) { showLocal('Seleziona la classe corretta.', 'error'); return; }
+      sendFeedback('incorrect', corrClass.value);
+    }
   });
 
   async function sendFeedback(type, correctClass=null){
     const id = currentPredictionId || (window.PENDING_PRELOAD && window.PENDING_PRELOAD.id);
-    if (!id) return;
+    if (!id) { showLocal('Nessuna predizione attiva.', 'error'); return; }
     try{
       const res = await fetch('/feedback', {
         method:'POST',
-        headers:{ 'Content-Type':'application/json', 'X-CSRFToken': csrfField.value },
+        headers:{ 'Content-Type':'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ prediction_id: id, feedback_type: type, correct_class: correctClass })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Errore invio feedback');
+      const txt = await res.text();
+      let data = {};
+      try { data = JSON.parse(txt); } catch {}
+      if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
 
       showLocal('Feedback salvato! Grazie 🙌', 'success');
 
@@ -269,13 +278,13 @@
       dropZone.classList.remove('opacity-50','pointer-events-none');
       fileInput.disabled = false;
       btnSubmit.disabled = false;
-
       if (pendingBadge) { pendingBadge.style.display = 'none'; }
-      // reset preload
+
       window.PENDING_PRELOAD = null;
       currentPredictionId = null;
     }catch(err){
-      showLocal(err.message, 'error');
+      console.error('Feedback error:', err, 'body:', txt);
+      showLocal('Errore: ' + err.message, 'error');
     }
   }
 
@@ -292,5 +301,6 @@
                           'bg-sky-900/70 border-sky-800 text-sky-100');
     localMsg.classList.remove('hidden');
   }
+})();
 </script>
 {% endblock %}

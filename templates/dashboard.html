@@ -2,236 +2,210 @@
 {% block title %}Dashboard · Smart Waste{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="max-w-6xl mx-auto space-y-6">
 
-  <!-- FILTRI -->
-  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl p-4">
-    <h2 class="text-lg font-semibold text-emerald-300 mb-3">Filtri</h2>
-    <div class="grid sm:grid-cols-2 md:grid-cols-6 gap-3">
-      <div>
-        <label class="block text-sm text-gray-300">Data da</label>
-        <input type="date" id="filter-date-from" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
-      </div>
-      <div>
-        <label class="block text-sm text-gray-300">Data a</label>
-        <input type="date" id="filter-date-to" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
-      </div>
-      <div>
-        <label class="block text-sm text-gray-300">Classe</label>
-        <select id="filter-class" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
-          <option value="">Tutte</option>
-          {% for cname in class_names %}
-            <option value="{{ cname }}">{{ cname|capitalize }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label class="block text-sm text-gray-300">Feedback</label>
-        <select id="filter-feedback" class="w-full bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
-          <option value="">Tutti</option>
-          <option value="correct">Corretto</option>
-          <option value="incorrect">Errato</option>
-          <option value="pending">Da confermare</option>
-        </select>
-      </div>
-      <div class="flex items-end gap-2">
-        <button id="btn-apply-filters" class="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-sm">Applica</button>
-        <button id="btn-reset-filters" class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-sm">Reset</button>
-      </div>
-      <div class="flex items-end gap-2 justify-end">
-        <label class="text-sm text-gray-300">Righe/pagina</label>
-        <select id="rows-per-page" class="bg-gray-950 border border-gray-800 rounded px-2 py-2 text-gray-200">
-          <option>5</option><option selected>10</option><option>20</option><option>50</option>
-        </select>
-      </div>
-    </div>
-  </div>
-
-  <!-- KPI -->
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
-    {% for cname, count in class_counts.items() %}
-      <div class="bg-gray-900/70 border border-gray-800 rounded-xl p-4 card-hover">
-        <div class="text-xs uppercase text-gray-400">{{ cname }}</div>
-        <div class="text-2xl font-semibold text-emerald-300 mt-1">{{ count }}</div>
+  <!-- Stat cards -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+    {% for name, count in class_counts.items() %}
+      <div class="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 shadow">
+        <div class="text-xs uppercase tracking-wide text-gray-400">{{ name|upper }}</div>
+        <div class="mt-2 text-3xl font-semibold text-emerald-400">{{ count }}</div>
       </div>
     {% endfor %}
   </div>
 
-  <!-- TABELLA -->
-  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl overflow-x-auto">
-    <table id="predictions-table" class="min-w-full text-sm">
-      <thead class="bg-gray-900">
-        <tr class="text-left text-gray-400">
-          <th class="px-4 py-3">Data</th>
-          <th class="px-4 py-3">Immagine</th>
-          <th class="px-4 py-3">Classe</th>
-          <th class="px-4 py-3">Confidenza</th>
-          <th class="px-4 py-3">Feedback</th>
-          <th class="px-4 py-3">Classe corretta</th>
-          {% if pending_exists %}<th class="px-4 py-3">Conferma</th>{% endif %}
+  <!-- Tabella -->
+  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl p-4 shadow-xl overflow-x-auto">
+    <h2 class="text-lg font-semibold text-emerald-300 mb-4">Storico predizioni</h2>
+
+    <table class="min-w-full text-sm">
+      <thead class="text-gray-300">
+        <tr class="border-b border-gray-800">
+          <th class="py-3 px-3 text-left">Data</th>
+          <th class="py-3 px-3 text-left">Immagine</th>
+          <th class="py-3 px-3 text-left">Classe</th>
+          <th class="py-3 px-3 text-left">Confidenza</th>
+          <th class="py-3 px-3 text-left">Feedback</th>
+          <th class="py-3 px-3 text-left">Classe corretta</th>
+          <th class="py-3 px-3 text-left">Conferma</th>
         </tr>
       </thead>
-      <tbody>
-        {% for pred in predictions %}
-          {% set is_pending = (not pred.feedback) %}
-          <tr class="border-t border-gray-800 hover:bg-gray-900/40 {% if is_pending %}pending-feedback{% endif %}"
-              data-pred-id="{{ pred._id }}"
-              data-class="{{ pred.class }}"
-              data-feedback="{{ pred.feedback if pred.feedback else 'pending' }}"
-              data-date="{{ pred.timestamp.strftime('%Y-%m-%d') if pred.timestamp else '' }}">
-            <td class="px-4 py-3 text-gray-300">{{ pred.timestamp.strftime('%d/%m/%Y %H:%M') if pred.timestamp else '' }}</td>
-            <td class="px-4 py-3">
-              {% if pred.image_filename %}
-                <img src="{{ url_for('uploaded_file', filename=pred.image_filename) }}" class="h-16 w-16 object-cover rounded-md border border-gray-800" />
-              {% else %}<span class="text-gray-500">—</span>{% endif %}
-            </td>
-            <td class="px-4 py-3 font-medium text-gray-100">{{ pred.class|capitalize }}</td>
-            <td class="px-4 py-3 text-gray-300">
-              {% if pred.confidence is number %}{{ (pred.confidence * 100)|round(2) }}%{% else %}{{ pred.confidence }}{% endif %}
-            </td>
-            <td class="px-4 py-3">
-              {% if pred.feedback == 'correct' %}
-                <span class="px-2 py-1 rounded-md text-xs bg-emerald-800/60 text-emerald-200 border border-emerald-700">Corretto</span>
-              {% elif pred.feedback == 'incorrect' %}
-                <span class="px-2 py-1 rounded-md text-xs bg-rose-800/60 text-rose-200 border border-rose-700">Errato</span>
-              {% else %}
-                <span class="px-2 py-1 rounded-md text-xs bg-amber-800/40 text-amber-200 border border-amber-700">Da confermare</span>
-              {% endif %}
-            </td>
-            <td class="px-4 py-3 text-gray-300">
-              {{ pred.correct_class_feedback|capitalize if pred.correct_class_feedback else '—' }}
-            </td>
+      <tbody id="predTableBody" class="divide-y divide-gray-800 text-gray-200">
 
-            {% if pending_exists %}
-              <td class="px-4 py-3">
-                {% if not pred.feedback %}
-                  <div class="flex flex-wrap items-center gap-2">
-                    <button class="btn-confirm-correct px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs btn-pulse">Conferma corretto</button>
-                    <select class="sel-correct-class bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
-                      <option value="">Classe corretta…</option>
-                      {% for c in class_names %}
-                        <option value="{{ c }}">{{ c|capitalize }}</option>
-                      {% endfor %}
-                    </select>
-                    <button class="btn-confirm-incorrect px-3 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs">Segna errato</button>
-                  </div>
-                {% else %}
-                  <span class="text-gray-500">—</span>
-                {% endif %}
-              </td>
+        {% for p in predictions %}
+        <tr data-id="{{ p._id }}">
+          <td class="py-3 px-3 whitespace-nowrap text-gray-300">
+            {{ p.timestamp.strftime('%d/%m/%Y %H:%M') if p.timestamp else '—' }}
+          </td>
+          <td class="py-3 px-3">
+            <img src="{{ url_for('uploaded_file', filename=p.image_filename) }}"
+                 class="h-14 w-14 rounded-md object-cover border border-gray-700" alt="">
+          </td>
+          <td class="py-3 px-3 font-semibold capitalize">{{ p.class }}</td>
+          <td class="py-3 px-3">{{ p.confidence }}</td>
+
+          <!-- Badge feedback -->
+          <td class="py-3 px-3" data-cell="badge">
+            {% if p.feedback == 'correct' %}
+              <span class="px-2 py-1 rounded text-xs bg-emerald-700/70 text-emerald-50">Corretto</span>
+            {% elif p.feedback == 'incorrect' %}
+              <span class="px-2 py-1 rounded text-xs bg-rose-700/70 text-rose-50">Errato</span>
+            {% else %}
+              <span class="px-2 py-1 rounded text-xs bg-amber-700/70 text-amber-50">Da confermare</span>
             {% endif %}
-          </tr>
-        {% else %}
-          <tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">Nessuna predizione trovata.</td></tr>
+          </td>
+
+          <!-- Classe corretta -->
+          <td class="py-3 px-3 capitalize" data-cell="correct-class">
+            {{ p.correct_class_feedback or '—' }}
+          </td>
+
+          <!-- Azioni -->
+          <td class="py-3 px-3" data-cell="actions">
+            {% if not p.feedback %}
+            <div class="flex items-center gap-2 flex-wrap">
+              <button class="btn-correct px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">
+                Conferma corretto
+              </button>
+
+              <!-- Blocco correzione: Nascosto finché non si preme “Segna errato” -->
+              <div class="corr-block hidden items-center gap-2">
+                <select class="corr-select bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm">
+                  <option value="">Classe corretta…</option>
+                  {% for c in class_names %}
+                    <option value="{{ c }}">{{ c|capitalize }}</option>
+                  {% endfor %}
+                </select>
+                <button class="btn-send-incorrect px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">
+                  Invia
+                </button>
+                <button class="btn-cancel px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100">
+                  Annulla
+                </button>
+              </div>
+
+              <button class="btn-incorrect px-3 py-1.5 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white">
+                Segna errato
+              </button>
+            </div>
+            {% else %}
+              <span class="text-gray-500">—</span>
+            {% endif %}
+          </td>
+        </tr>
         {% endfor %}
+
+        {% if predictions|length == 0 %}
+        <tr>
+          <td colspan="7" class="py-8 text-center text-gray-400">
+            Nessuna predizione trovata.
+          </td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
 
-  <!-- PAGINAZIONE -->
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div id="page-info" class="text-sm text-gray-400">Pagina 1 di 1</div>
-    <div class="flex items-center gap-2">
-      <button id="btn-prev" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-gray-200 disabled:opacity-50">‹ Prec</button>
-      <button id="btn-next" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-gray-200 disabled:opacity-50">Succ ›</button>
-    </div>
-  </div>
+  <!-- messaggio locale -->
+  <div id="dashMsg" class="hidden rounded-lg px-4 py-3 text-sm border"></div>
 </div>
 
 <script>
-  // --- Filtri + paginazione client-side ---
-  const tbody = document.querySelector('#predictions-table tbody');
-  const rowsAll = Array.from(tbody.querySelectorAll('tr[data-pred-id]'));
-  const pageInfo = document.getElementById('page-info');
-  const rowsPerSelect = document.getElementById('rows-per-page');
-  const btnPrev = document.getElementById('btn-prev');
-  const btnNext = document.getElementById('btn-next');
+(() => {
+  const table = document.getElementById('predTableBody');
+  const dashMsg = document.getElementById('dashMsg');
 
-  let filtered = rowsAll.slice();
-  let page = 1;
-
-  function applyFilters() {
-    const from = document.getElementById('filter-date-from').value;
-    const to = document.getElementById('filter-date-to').value;
-    const cls = document.getElementById('filter-class').value;
-    const fb = document.getElementById('filter-feedback').value;
-
-    filtered = rowsAll.filter(row => {
-      const rDate = row.dataset.date || '';
-      const rClass = row.dataset.class || '';
-      const rFb = row.dataset.feedback || '';
-      if (from && rDate < from) return false;
-      if (to && rDate > to) return false;
-      if (cls && rClass !== cls) return false;
-      if (fb && rFb !== fb) return false;
-      return true;
-    });
-    page = 1;
-    renderPage();
+  function showMsg(text, type='info'){
+    dashMsg.textContent = text;
+    dashMsg.className = 'rounded-lg px-4 py-3 text-sm border ' +
+      (type==='success' ? 'bg-emerald-900/70 border-emerald-800 text-emerald-100' :
+       type==='error'   ? 'bg-rose-900/70 border-rose-800 text-rose-100' :
+                          'bg-sky-900/70 border-sky-800 text-sky-100');
+    dashMsg.classList.remove('hidden');
+    setTimeout(() => dashMsg.classList.add('hidden'), 2500);
   }
 
-  function renderPage() {
-    const perPage = parseInt(rowsPerSelect.value, 10) || 10;
-    const total = filtered.length;
-    const pages = Math.max(1, Math.ceil(total / perPage));
-    if (page > pages) page = pages;
+  // Delegation: gestiamo tutti i click sulla tabella
+  table.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
 
-    // nascondi tutto, poi mostra solo lo slice
-    rowsAll.forEach(r => r.style.display = 'none');
-    const start = (page - 1) * perPage;
-    const end = start + perPage;
-    filtered.slice(start, end).forEach(r => r.style.display = '');
+    const row = btn.closest('tr');
+    const id  = row.getAttribute('data-id');
+    const badgeCell = row.querySelector('[data-cell="badge"]');
+    const correctCell = row.querySelector('[data-cell="correct-class"]');
+    const actionsCell = row.querySelector('[data-cell="actions"]');
+    const corrBlock = row.querySelector('.corr-block');
+    const select = row.querySelector('.corr-select');
 
-    pageInfo.textContent = `Pagina ${page} di ${pages} (righe: ${total})`;
-    btnPrev.disabled = (page <= 1);
-    btnNext.disabled = (page >= pages);
-  }
-
-  document.getElementById('btn-apply-filters').addEventListener('click', applyFilters);
-  document.getElementById('btn-reset-filters').addEventListener('click', () => {
-    ['filter-date-from','filter-date-to','filter-class','filter-feedback'].forEach(id => document.getElementById(id).value = '');
-    applyFilters();
-  });
-  rowsPerSelect.addEventListener('change', renderPage);
-  btnPrev.addEventListener('click', () => { page = Math.max(1, page - 1); renderPage(); });
-  btnNext.addEventListener('click', () => { page = page + 1; renderPage(); });
-
-  // Inizializza
-  applyFilters();
-
-  // --- Feedback da tabella (uguale a prima) ---
-  function getCookie(name) { const v = `; ${document.cookie}`; const p = v.split(`; ${name}=`); if (p.length === 2) return decodeURIComponent(p.pop().split(';').shift()); }
-  const CSRF_TOKEN = getCookie('csrf_token');
-
-  async function sendFeedback(predictionId, type, correctClass=null) {
-    const res = await fetch('/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', 'X-CSRFToken': CSRF_TOKEN || '' },
-      body: JSON.stringify({ prediction_id: predictionId, feedback_type: type, correct_class: correctClass })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Errore salvataggio feedback');
-    return data;
-  }
-
-  document.querySelectorAll('tbody tr[data-pred-id]').forEach(row => {
-    const predId = row.getAttribute('data-pred-id');
-    const btnOk = row.querySelector('.btn-confirm-correct');
-    const btnNo = row.querySelector('.btn-confirm-incorrect');
-    const sel = row.querySelector('.sel-correct-class');
-    if (btnOk) {
-      btnOk.addEventListener('click', async () => {
-        try { btnOk.disabled = true; await sendFeedback(predId, 'correct'); location.reload(); }
-        catch(e){ btnOk.disabled = false; alert(e.message); }
-      });
+    // 1) Segna errato → mostra la select (senza inviare ancora)
+    if (btn.classList.contains('btn-incorrect')) {
+      corrBlock.classList.remove('hidden');
+      select.focus();
+      return;
     }
-    if (btnNo) {
-      btnNo.addEventListener('click', async () => {
-        if (!sel || !sel.value) { alert('Seleziona la classe corretta.'); return; }
-        try { btnNo.disabled = true; await sendFeedback(predId, 'incorrect', sel.value); location.reload(); }
-        catch(e){ btnNo.disabled = false; alert(e.message); }
-      });
+
+    // 2) Annulla → nascondi il blocco select
+    if (btn.classList.contains('btn-cancel')) {
+      corrBlock.classList.add('hidden');
+      select.value = '';
+      return;
+    }
+
+    // 3) Conferma corretto → invia feedback correct
+    if (btn.classList.contains('btn-correct')) {
+      try {
+        const res = await fetch('/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ prediction_id: id, feedback_type: 'correct' })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Errore HTTP');
+
+        // UI update
+        badgeCell.innerHTML = '<span class="px-2 py-1 rounded text-xs bg-emerald-700/70 text-emerald-50">Corretto</span>';
+        actionsCell.innerHTML = '<span class="text-gray-500">—</span>';
+        showMsg('Feedback salvato.', 'success');
+      } catch (err) {
+        console.error(err);
+        showMsg('Errore: ' + err.message, 'error');
+      }
+      return;
+    }
+
+    // 4) Invia errato → richiede selezione
+    if (btn.classList.contains('btn-send-incorrect')) {
+      const value = select.value;
+      if (!value) { showMsg('Seleziona la classe corretta.', 'error'); return; }
+
+      try {
+        const res = await fetch('/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            prediction_id: id,
+            feedback_type: 'incorrect',
+            correct_class: value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Errore HTTP');
+
+        // UI update
+        badgeCell.innerHTML = '<span class="px-2 py-1 rounded text-xs bg-rose-700/70 text-rose-50">Errato</span>';
+        correctCell.textContent = value;
+        actionsCell.innerHTML = '<span class="text-gray-500">—</span>';
+        showMsg('Correzione inviata. Grazie!', 'success');
+      } catch (err) {
+        console.error(err);
+        showMsg('Errore: ' + err.message, 'error');
+      }
+      return;
     }
   });
+})();
 </script>
 {% endblock %}
