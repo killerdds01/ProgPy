@@ -21,6 +21,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField, FileField, BooleanField
 from wtforms.validators import DataRequired
+from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 
 # --- PyTorch ---
 import torch
@@ -33,7 +35,9 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 
 
-# ============== Setup base ==============
+# =============================================================================
+# Setup base applicazione
+# =============================================================================
 load_dotenv()
 
 app = Flask(__name__)
@@ -53,10 +57,12 @@ app.config.update(
     REMEMBER_COOKIE_SECURE=False,      # True in produzione (HTTPS)
 )
 
+# Cartella dove salviamo le immagini degli utenti
 UPLOAD_FOLDER = 'uploaded_images'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Abilitazioni varie
 CORS(app)
 csrf = CSRFProtect(app)
 
@@ -72,7 +78,9 @@ predictions_collection = db.predictions
 users_collection = db.users
 
 
-# ============== Forms ==============
+# =============================================================================
+# Forms HTML
+# =============================================================================
 class RegistrationForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired()])
@@ -89,7 +97,9 @@ class UploadForm(FlaskForm):
     submit = SubmitField('Prevedi')
 
 
-# ============== User model ==============
+# =============================================================================
+# User model + loader
+# =============================================================================
 class User(UserMixin):
     def __init__(self, user_data):
         self.id = str(user_data['_id'])
@@ -102,45 +112,83 @@ def load_user(user_id):
     return User(doc) if doc else None
 
 
-# ============== Modello ML ==============
-CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
+# =============================================================================
+# Modello ML (ResNet18) + Caricamento pesi + Calibrazione
+# =============================================================================
+
+# --- Nomi classi: prova a caricarli da class_index.json generato dal notebook ---
+DEFAULT_CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
+try:
+    with open('class_index.json', 'r', encoding='utf-8') as f:
+        _map = json.load(f)                           # es: {"0":"plastica","1":"carta",...}
+        CLASS_NAMES = [ _map[str(i)] for i in range(len(_map)) ]
+        print(f"[Model] class_index.json trovato: {CLASS_NAMES}")
+except Exception:
+    CLASS_NAMES = DEFAULT_CLASS_NAMES
+    print(f"[Model] class_index.json non trovato → fallback: {CLASS_NAMES}")
+
 NUM_CLASSES = len(CLASS_NAMES)
 device = torch.device("cpu")
-MODEL_PATH = 'best_model_finetuned_light.pth'
 
-model = models.resnet18(weights=None)
-model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+# --- Percorsi modelli: Stage-2 come principale, light come fallback ---
+MODEL_PATH = 'best_model_stage2.pth'               # principale (sblocco layer4)
+FALLBACK_PATH = 'best_model_finetuned_light.pth'   # fallback (solo fc)
 
-# torch.load sicuro con fallback
-try:
-    state = torch.load(MODEL_PATH, map_location=device, weights_only=True)
-except TypeError:
-    # Per versioni PyTorch < 2.4
-    state = torch.load(MODEL_PATH, map_location=device)
-model.load_state_dict(state)
-
-# Temperature scaling (se presente)
+# --- Temperature scaling (calibrazione confidenza) ---
 TEMPERATURE = 1.0
 try:
     with open('calibration.json', 'r') as f:
         CALIB = json.load(f)
         TEMPERATURE = float(CALIB.get('temperature', 1.0))
-    print(f"Temperature scaling attivo: T={TEMPERATURE}")
+    print(f"[Model] Temperature scaling attivo: T={TEMPERATURE}")
 except Exception:
-    print("Nessuna calibrazione trovata. Uso T=1.0")
+    print("[Model] Nessuna calibrazione trovata. Uso T=1.0")
+
+# --- Costruisci architettura e carica i pesi con fallback robusto ---
+model = models.resnet18(weights=None)
+model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+
+def _safe_load(path):
+    """torch.load compatibile con PyTorch vecchi/nuovi (weights_only facoltativo)."""
+    try:
+        return torch.load(path, map_location=device, weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+try:
+    state = _safe_load(MODEL_PATH)
+    model.load_state_dict(state)
+    print(f"[Model] Caricato: {MODEL_PATH}")
+except Exception as e:
+    print(f"[Model] Errore nel caricare {MODEL_PATH}: {e} → uso fallback.")
+    state = _safe_load(FALLBACK_PATH)
+    model.load_state_dict(state)
+    print(f"[Model] Caricato fallback: {FALLBACK_PATH}")
 
 model.to(device)
 model.eval()
 
+# --- Trasformazioni coerenti con il training ---
 transform = transforms.Compose([
-    transforms.Resize((256)),
+    transforms.Resize(256),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
 
+# --- Helper softmax con temperatura (per probabilità calibrate) ---
+def softmax_with_temperature(logits_1d, T: float = 1.0):
+    return torch.softmax(logits_1d / T, dim=0)
 
-# ============== Middleware ==============
+# --- Upload: estensioni consentite ---
+ALLOWED_EXT = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+def allowed_file(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in ALLOWED_EXT
+
+
+# =============================================================================
+# Middleware
+# =============================================================================
 # Idle timeout
 @app.before_request
 def idle_logout():
@@ -167,7 +215,7 @@ def force_feedback_before_navigation():
 
     allowed_endpoints = {
         'app', 'predict', 'submit_feedback', 'uploaded_file',
-        'login', 'register', 'logout', 'static'
+        'login', 'register', 'logout', 'static', 'model_info'
     }
     endpoint = (request.endpoint or '')
     if request.method == 'GET' and endpoint not in allowed_endpoints:
@@ -180,7 +228,9 @@ def inject_now():
     return {'now': datetime.datetime.now}
 
 
-# ============== Routes ==============
+# =============================================================================
+# Routes
+# =============================================================================
 @app.route('/')
 def landing():
     # Avviso di eventuali vecchie pending se non c'è una pending in sessione
@@ -275,6 +325,7 @@ def dashboard():
         pending_exists=pending_exists
     )
 
+# --------------------------- PREDICT -----------------------------------------
 @app.route('/predict', methods=['POST'])
 @login_required
 def predict():
@@ -282,32 +333,38 @@ def predict():
         return jsonify({'error': 'Nessun file inviato.'}), 400
 
     file = request.files['file']
-    unique_filename = f"{uuid.uuid4()}_{file.filename}"
+
+    # Validazione estensione + sanitizzazione nome file
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Formato non supportato. Usa jpg/png/bmp/webp.'}), 400
+    safe_name = secure_filename(file.filename)
+    unique_filename = f"{uuid.uuid4()}_{safe_name}"
     filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
 
+    # Salva e valida l'immagine
     try:
         file.save(filepath)
-        # Validazione base immagine
-        Image.open(filepath).verify()
-        img = Image.open(filepath).convert('RGB')
+        Image.open(filepath).verify()             # check rapido (header)
+        img = Image.open(filepath).convert('RGB') # riapri per trasformazioni
     except (UnidentifiedImageError, OSError):
         if os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({'error': 'File non valido o danneggiato.'}), 400
 
+    # Inference
     input_tensor = transform(img).unsqueeze(0).to(device)
     with torch.no_grad():
-        output = model(input_tensor)
-        # ---- Calibrazione confidenza ----
-        if TEMPERATURE and TEMPERATURE != 1.0:
-            output = output / TEMPERATURE
-        probabilities = torch.nn.functional.softmax(output[0], dim=0)
-        predicted_prob, predicted_idx = torch.max(probabilities, 0)
-        predicted_class = CLASS_NAMES[predicted_idx.item()]
+        logits = model(input_tensor)[0]
+        probs = softmax_with_temperature(logits, TEMPERATURE)
+        conf, idx = torch.max(probs, 0)
 
+    predicted_class = CLASS_NAMES[idx.item()]
+    confidence_pct = f"{conf.item() * 100:.2f}%"
+
+    # Salva su DB e “blocca” la UI finché non arriva il feedback
     prediction_data = {
         'class': predicted_class,
-        'confidence': f"{predicted_prob.item() * 100:.2f}%",
+        'confidence': confidence_pct,
         'timestamp': datetime.datetime.now(),
         'image_filename': unique_filename,
         'user_id': current_user.id,
@@ -319,11 +376,11 @@ def predict():
 
     return jsonify({
         'class': predicted_class,
-        'confidence': f"{predicted_prob.item() * 100:.2f}%",
+        'confidence': confidence_pct,
         'prediction_id': str(inserted_id)
     })
 
-# ---- FEEDBACK: esente da CSRF ----
+# ---- FEEDBACK: esente da CSRF (API) ----
 @app.route('/feedback', methods=['POST'])
 @login_required
 @csrf.exempt
@@ -355,6 +412,7 @@ def submit_feedback():
 
     return jsonify({'message': 'Feedback salvato.'}), 200
 
+# Servizio immagini caricate (ACL: solo proprietario)
 @app.route('/uploads/<filename>')
 @login_required
 def uploaded_file(filename):
@@ -363,7 +421,25 @@ def uploaded_file(filename):
         abort(403)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+# -------------------------- Diagnostica modello -------------------------------
+@app.route('/model_info')
+def model_info():
+    info = {
+        'classes': CLASS_NAMES,
+        'num_classes': len(CLASS_NAMES),
+        'temperature': TEMPERATURE,
+        'model_loaded': ('best_model_stage2.pth' if os.path.exists('best_model_stage2.pth') else 'best_model_finetuned_light.pth')
+    }
+    return jsonify(info)
 
-# ============== Run ==============
+# -------------------------- Error handlers -----------------------------------
+@app.errorhandler(RequestEntityTooLarge)
+def handle_file_too_large(e):
+    return jsonify({'error': 'File troppo grande. Max 10MB.'}), 413
+
+
+# =============================================================================
+# Run
+# =============================================================================
 if __name__ == '__main__':
     app.run(debug=True, host='127.0.0.1', port=5000)
