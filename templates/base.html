@@ -12,9 +12,6 @@
   <!-- NAVBAR -->
   <header class="bg-gray-900/80 border-b border-gray-800">
     <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-      {% set has_pending = current_user.is_authenticated and session.get('pending_prediction_id') %}
-
-      <!-- Logo → landing -->
       <a href="{{ url_for('landing') }}" class="flex items-center gap-2">
         <span class="text-2xl">♻️</span>
         <span class="text-xl font-semibold text-emerald-400">Smart Waste</span>
@@ -24,6 +21,9 @@
         {% if current_user.is_authenticated %}
           <a href="{{ url_for('app') }}" class="hover:text-emerald-300">Classifica</a>
           <a href="{{ url_for('dashboard') }}" class="hover:text-emerald-300">Dashboard</a>
+          {% if is_admin %}
+            <a href="{{ url_for('export_page') }}" class="hover:text-emerald-300">Export</a>
+          {% endif %}
           <a href="{{ url_for('logout') }}" class="hover:text-rose-300">Logout</a>
         {% else %}
           <a href="{{ url_for('login') }}" class="hover:text-emerald-300">Accedi</a>
@@ -32,6 +32,7 @@
       </nav>
     </div>
 
+    {# Banner “predizione in attesa” nelle pagine app/dashboard #}
     {% set show_pending_banner = current_user.is_authenticated
                                  and session.get('pending_prediction_id')
                                  and request.endpoint in ['app','dashboard'] %}

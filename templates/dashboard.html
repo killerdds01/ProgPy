@@ -1,211 +1,73 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · Smart Waste{% endblock %}
-
+{% block title %}Dashboard • Smart Waste{% endblock %}
 {% block content %}
-<div class="max-w-6xl mx-auto space-y-6">
+<h1 class="text-xl font-semibold mb-4">Le mie predizioni</h1>
 
-  <!-- Stat cards -->
-  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-    {% for name, count in class_counts.items() %}
-      <div class="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 shadow">
-        <div class="text-xs uppercase tracking-wide text-gray-400">{{ name|upper }}</div>
-        <div class="mt-2 text-3xl font-semibold text-emerald-400">{{ count }}</div>
-      </div>
-    {% endfor %}
+{% if pending_exists %}
+  <div class="mb-4 text-sm text-amber-200">
+    ⚠️ Hai una predizione in attesa di conferma. Vai alla <a class="underline" href="{{ url_for('app') }}">pagina di classificazione</a>.
   </div>
+{% endif %}
 
-  <!-- Tabella -->
-  <div class="bg-gray-900/70 border border-gray-800 rounded-2xl p-4 shadow-xl overflow-x-auto">
-    <h2 class="text-lg font-semibold text-emerald-300 mb-4">Storico predizioni</h2>
-
-    <table class="min-w-full text-sm">
-      <thead class="text-gray-300">
-        <tr class="border-b border-gray-800">
-          <th class="py-3 px-3 text-left">Data</th>
-          <th class="py-3 px-3 text-left">Immagine</th>
-          <th class="py-3 px-3 text-left">Classe</th>
-          <th class="py-3 px-3 text-left">Confidenza</th>
-          <th class="py-3 px-3 text-left">Feedback</th>
-          <th class="py-3 px-3 text-left">Classe corretta</th>
-          <th class="py-3 px-3 text-left">Conferma</th>
-        </tr>
-      </thead>
-      <tbody id="predTableBody" class="divide-y divide-gray-800 text-gray-200">
-
-        {% for p in predictions %}
-        <tr data-id="{{ p._id }}">
-          <td class="py-3 px-3 whitespace-nowrap text-gray-300">
-            {{ p.timestamp.strftime('%d/%m/%Y %H:%M') if p.timestamp else '—' }}
-          </td>
-          <td class="py-3 px-3">
-            <img src="{{ url_for('uploaded_file', filename=p.image_filename) }}"
-                 class="h-14 w-14 rounded-md object-cover border border-gray-700" alt="">
-          </td>
-          <td class="py-3 px-3 font-semibold capitalize">{{ p.class }}</td>
-          <td class="py-3 px-3">{{ p.confidence }}</td>
-
-          <!-- Badge feedback -->
-          <td class="py-3 px-3" data-cell="badge">
-            {% if p.feedback == 'correct' %}
-              <span class="px-2 py-1 rounded text-xs bg-emerald-700/70 text-emerald-50">Corretto</span>
-            {% elif p.feedback == 'incorrect' %}
-              <span class="px-2 py-1 rounded text-xs bg-rose-700/70 text-rose-50">Errato</span>
-            {% else %}
-              <span class="px-2 py-1 rounded text-xs bg-amber-700/70 text-amber-50">Da confermare</span>
-            {% endif %}
-          </td>
-
-          <!-- Classe corretta -->
-          <td class="py-3 px-3 capitalize" data-cell="correct-class">
-            {{ p.correct_class_feedback or '—' }}
-          </td>
-
-          <!-- Azioni -->
-          <td class="py-3 px-3" data-cell="actions">
-            {% if not p.feedback %}
-            <div class="flex items-center gap-2 flex-wrap">
-              <button class="btn-correct px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white">
-                Conferma corretto
-              </button>
-
-              <!-- Blocco correzione: Nascosto finché non si preme “Segna errato” -->
-              <div class="corr-block hidden items-center gap-2">
-                <select class="corr-select bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-sm">
-                  <option value="">Classe corretta…</option>
-                  {% for c in class_names %}
-                    <option value="{{ c }}">{{ c|capitalize }}</option>
-                  {% endfor %}
-                </select>
-                <button class="btn-send-incorrect px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white">
-                  Invia
-                </button>
-                <button class="btn-cancel px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100">
-                  Annulla
-                </button>
-              </div>
-
-              <button class="btn-incorrect px-3 py-1.5 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white">
-                Segna errato
-              </button>
-            </div>
-            {% else %}
-              <span class="text-gray-500">—</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-
-        {% if predictions|length == 0 %}
-        <tr>
-          <td colspan="7" class="py-8 text-center text-gray-400">
-            Nessuna predizione trovata.
-          </td>
-        </tr>
-        {% endif %}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- messaggio locale -->
-  <div id="dashMsg" class="hidden rounded-lg px-4 py-3 text-sm border"></div>
+<div class="grid md:grid-cols-5 gap-3 mb-6">
+  {% for c in class_names %}
+    <div class="bg-gray-900/60 border border-gray-800 rounded-lg p-4">
+      <div class="text-sm text-gray-400">{{ c }}</div>
+      <div class="text-2xl font-semibold">{{ class_counts.get(c, 0) }}</div>
+    </div>
+  {% endfor %}
 </div>
 
-<script>
-(() => {
-  const table = document.getElementById('predTableBody');
-  const dashMsg = document.getElementById('dashMsg');
-
-  function showMsg(text, type='info'){
-    dashMsg.textContent = text;
-    dashMsg.className = 'rounded-lg px-4 py-3 text-sm border ' +
-      (type==='success' ? 'bg-emerald-900/70 border-emerald-800 text-emerald-100' :
-       type==='error'   ? 'bg-rose-900/70 border-rose-800 text-rose-100' :
-                          'bg-sky-900/70 border-sky-800 text-sky-100');
-    dashMsg.classList.remove('hidden');
-    setTimeout(() => dashMsg.classList.add('hidden'), 2500);
-  }
-
-  // Delegation: gestiamo tutti i click sulla tabella
-  table.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button');
-    if (!btn) return;
-
-    const row = btn.closest('tr');
-    const id  = row.getAttribute('data-id');
-    const badgeCell = row.querySelector('[data-cell="badge"]');
-    const correctCell = row.querySelector('[data-cell="correct-class"]');
-    const actionsCell = row.querySelector('[data-cell="actions"]');
-    const corrBlock = row.querySelector('.corr-block');
-    const select = row.querySelector('.corr-select');
-
-    // 1) Segna errato → mostra la select (senza inviare ancora)
-    if (btn.classList.contains('btn-incorrect')) {
-      corrBlock.classList.remove('hidden');
-      select.focus();
-      return;
-    }
-
-    // 2) Annulla → nascondi il blocco select
-    if (btn.classList.contains('btn-cancel')) {
-      corrBlock.classList.add('hidden');
-      select.value = '';
-      return;
-    }
-
-    // 3) Conferma corretto → invia feedback correct
-    if (btn.classList.contains('btn-correct')) {
-      try {
-        const res = await fetch('/feedback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ prediction_id: id, feedback_type: 'correct' })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Errore HTTP');
-
-        // UI update
-        badgeCell.innerHTML = '<span class="px-2 py-1 rounded text-xs bg-emerald-700/70 text-emerald-50">Corretto</span>';
-        actionsCell.innerHTML = '<span class="text-gray-500">—</span>';
-        showMsg('Feedback salvato.', 'success');
-      } catch (err) {
-        console.error(err);
-        showMsg('Errore: ' + err.message, 'error');
-      }
-      return;
-    }
-
-    // 4) Invia errato → richiede selezione
-    if (btn.classList.contains('btn-send-incorrect')) {
-      const value = select.value;
-      if (!value) { showMsg('Seleziona la classe corretta.', 'error'); return; }
-
-      try {
-        const res = await fetch('/feedback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({
-            prediction_id: id,
-            feedback_type: 'incorrect',
-            correct_class: value
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Errore HTTP');
-
-        // UI update
-        badgeCell.innerHTML = '<span class="px-2 py-1 rounded text-xs bg-rose-700/70 text-rose-50">Errato</span>';
-        correctCell.textContent = value;
-        actionsCell.innerHTML = '<span class="text-gray-500">—</span>';
-        showMsg('Correzione inviata. Grazie!', 'success');
-      } catch (err) {
-        console.error(err);
-        showMsg('Errore: ' + err.message, 'error');
-      }
-      return;
-    }
-  });
-})();
-</script>
+<div class="overflow-x-auto rounded-lg border border-gray-800">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-900/60">
+      <tr>
+        <th class="px-3 py-2 text-left">Immagine</th>
+        <th class="px-3 py-2 text-left">Classe</th>
+        <th class="px-3 py-2 text-left">Conf.</th>
+        <th class="px-3 py-2 text-left">Stato</th>
+        <th class="px-3 py-2 text-left">Data</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in predictions %}
+        <tr class="border-t border-gray-800">
+          <td class="px-3 py-2">
+            {% if p.image_filename %}
+              <img src="{{ url_for('uploaded_file', filename=p.image_filename) }}" alt="" class="h-16 w-16 object-cover rounded">
+            {% endif %}
+          </td>
+          <td class="px-3 py-2">
+            <span class="px-2 py-1 rounded bg-gray-800 border border-gray-700">{{ p['class'] }}</span>
+          </td>
+          <td class="px-3 py-2">{{ p.get('confidence','') }}</td>
+          <td class="px-3 py-2">
+            {% if p.get('feedback') %}
+              {% if p.get('feedback') == 'correct' %}
+                <span class="text-emerald-300">✔️ corretta</span>
+              {% else %}
+                <span class="text-rose-300">✏️ corretta dall'utente</span>
+              {% endif %}
+              {% if p.get('validated') is not none %}
+                {% if p.get('validated') %}
+                  <span class="ml-2 text-emerald-400">(validata)</span>
+                {% else %}
+                  <span class="ml-2 text-rose-400">(non validata)</span>
+                {% endif %}
+              {% endif %}
+            {% else %}
+              <span class="text-amber-300">in attesa</span>
+            {% endif %}
+            {% if p.get('needs_review') and p.get('feedback') is none %}
+              <span class="ml-2 px-2 py-0.5 rounded bg-amber-900/50 border border-amber-800 text-amber-200">serve revisione</span>
+            {% endif %}
+          </td>
+          <td class="px-3 py-2">
+            {{ p.get('timestamp').strftime('%d/%m/%Y %H:%M') if p.get('timestamp') else '' }}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

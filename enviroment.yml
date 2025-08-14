@@ -1,0 +1,26 @@
+name: smart-waste
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pillow
+  - flask=3.*
+  - flask-login=0.6.*
+  - flask-wtf=1.2.*
+  - flask-cors=4.*
+  - python-dotenv=1.*
+  - pymongo=4.*
+  - jinja2=3.*
+  - werkzeug=3.*
+  # PyTorch CPU. Se hai GPU NVIDIA, rimuovi "cpuonly" e installa la build CUDA (vedi sito PyTorch).
+  - pytorch::pytorch=2.3.*
+  - pytorch::torchvision=0.18.*
+  - cpuonly
+  - pip:
+      # opzionali
+      - gunicorn==21.2.0      # utile in deploy Linux
+      # - boto3==1.34.*       # SOLO se in futuro userai S3

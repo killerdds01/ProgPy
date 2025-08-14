@@ -1,14 +1,25 @@
 # --- Moduli standard ---
-import json
 import os
+import io
+import csv
+import hmac
+import json
 import uuid
+import shutil
+import hashlib
+import tempfile
 import datetime
+import zipfile
+from pathlib import Path
 from datetime import timedelta
+from functools import wraps
+from typing import Optional
+
 
 # --- Flask e estensioni ---
 from flask import (
     Flask, request, jsonify, render_template, redirect, url_for,
-    flash, session, send_from_directory, abort
+    flash, session, send_from_directory, abort, send_file
 )
 from flask_cors import CORS
 from flask_login import (
@@ -18,11 +29,11 @@ from flask_login import (
 from flask_wtf.csrf import CSRFProtect
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField, FileField, BooleanField
 from wtforms.validators import DataRequired
-from werkzeug.utils import secure_filename
-from werkzeug.exceptions import RequestEntityTooLarge
 
 # --- PyTorch ---
 import torch
@@ -35,52 +46,64 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 
 
-# =============================================================================
-# Setup base applicazione
-# =============================================================================
+# ========================== Setup base ==========================
 load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'DEV_KEY_CHANGE_ME')
 
-# Limite dimensione upload (facoltativo): 10MB
+# Limite dimensione upload (10MB)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+
+# Consenti CSRF via header per l'AJAX della pagina (fetch con "X-CSRFToken")
+app.config['WTF_CSRF_HEADERS'] = ['X-CSRFToken', 'X-CSRF-Token']
 
 # Cookie & session policy
 app.config.update(
-    REMEMBER_COOKIE_DURATION=timedelta(days=14),      # "Ricordami" 14 giorni
-    PERMANENT_SESSION_LIFETIME=timedelta(minutes=45), # Timeout inattività 45 min
+    REMEMBER_COOKIE_DURATION=timedelta(days=14),       # "Ricordami" 14 giorni
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=45),  # Timeout inattività 45 min
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=False,       # True in produzione (HTTPS)
+    SESSION_COOKIE_SECURE=False,                       # True in produzione (HTTPS)
     REMEMBER_COOKIE_HTTPONLY=True,
-    REMEMBER_COOKIE_SECURE=False,      # True in produzione (HTTPS)
+    REMEMBER_COOKIE_SECURE=False,                      # True in produzione (HTTPS)
 )
 
-# Cartella dove salviamo le immagini degli utenti
 UPLOAD_FOLDER = 'uploaded_images'
+Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Abilitazioni varie
+# Tipi consentiti e mapping estensione
+ALLOWED_MIME = {'image/jpeg', 'image/png', 'image/webp'}
+MIME_TO_EXT = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp'
+}
+
 CORS(app)
 csrf = CSRFProtect(app)
 
-# --- Flask-Login ---
+# --- Handler 413: file troppo grande ---
+@app.errorhandler(RequestEntityTooLarge)
+def handle_413(_e):
+    return jsonify({'error': 'File troppo grande (limite massimo superato).'}), 413
+
+
+# ========================== Flask-Login ==========================
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# --- Mongo ---
-client = MongoClient('mongodb://localhost:27017/')
+# ========================== MongoDB ==========================
+MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017/')
+client = MongoClient(MONGO_URL)
 db = client.smart_waste
 predictions_collection = db.predictions
 users_collection = db.users
 
 
-# =============================================================================
-# Forms HTML
-# =============================================================================
+# ========================== Forms ==========================
 class RegistrationForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired()])
@@ -97,14 +120,13 @@ class UploadForm(FlaskForm):
     submit = SubmitField('Prevedi')
 
 
-# =============================================================================
-# User model + loader
-# =============================================================================
+# ========================== User model + loader ==========================
 class User(UserMixin):
     def __init__(self, user_data):
         self.id = str(user_data['_id'])
         self.username = user_data['username']
         self.password_hash = user_data['password']
+        self.role = user_data.get('role', 'user')  # 'user' | 'admin'
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -112,83 +134,122 @@ def load_user(user_id):
     return User(doc) if doc else None
 
 
-# =============================================================================
-# Modello ML (ResNet18) + Caricamento pesi + Calibrazione
-# =============================================================================
+# --- Bootstrap admin opzionale (da .env) ---
+# ADMIN_USERNAME=tuonome
+# ADMIN_PASSWORD=supersegreta (opzionale: se assente e l'utente esiste, lo promuove; se non esiste, crea con password random)
+admin_username = os.environ.get('ADMIN_USERNAME')
+admin_password = os.environ.get('ADMIN_PASSWORD')  # opzionale
+if admin_username:
+    existing = users_collection.find_one({'username': admin_username})
+    if existing:
+        if existing.get('role') != 'admin':
+            users_collection.update_one({'_id': existing['_id']}, {'$set': {'role': 'admin'}})
+            print(f"[BOOT] Promosso admin: {admin_username}")
+    else:
+        pwd = admin_password or uuid.uuid4().hex
+        users_collection.insert_one({
+            'username': admin_username,
+            'password': generate_password_hash(pwd),
+            'role': 'admin'
+        })
+        print(f"[BOOT] Creato admin: {admin_username} (password generata se non fornita)")
 
-# --- Nomi classi: prova a caricarli da class_index.json generato dal notebook ---
-DEFAULT_CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
-try:
-    with open('class_index.json', 'r', encoding='utf-8') as f:
-        _map = json.load(f)                           # es: {"0":"plastica","1":"carta",...}
-        CLASS_NAMES = [ _map[str(i)] for i in range(len(_map)) ]
-        print(f"[Model] class_index.json trovato: {CLASS_NAMES}")
-except Exception:
-    CLASS_NAMES = DEFAULT_CLASS_NAMES
-    print(f"[Model] class_index.json non trovato → fallback: {CLASS_NAMES}")
 
+# ========================== Modello ML ==========================
+CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
 NUM_CLASSES = len(CLASS_NAMES)
 device = torch.device("cpu")
 
-# --- Percorsi modelli: Stage-2 come principale, light come fallback ---
-MODEL_PATH = 'best_model_stage2.pth'               # principale (sblocco layer4)
-FALLBACK_PATH = 'best_model_finetuned_light.pth'   # fallback (solo fc)
+# Percorsi artefatti modello
+MODEL_PATH = os.environ.get('MODEL_PATH', 'best_model_finetuned_light.pth')
+CALIB_PATH = os.environ.get('CALIB_PATH', 'calibration.json')
 
-# --- Temperature scaling (calibrazione confidenza) ---
-TEMPERATURE = 1.0
-try:
-    with open('calibration.json', 'r') as f:
-        CALIB = json.load(f)
-        TEMPERATURE = float(CALIB.get('temperature', 1.0))
-    print(f"[Model] Temperature scaling attivo: T={TEMPERATURE}")
-except Exception:
-    print("[Model] Nessuna calibrazione trovata. Uso T=1.0")
-
-# --- Costruisci architettura e carica i pesi con fallback robusto ---
+# Costruzione modello (ResNet18 con ultimo layer per 5 classi)
 model = models.resnet18(weights=None)
 model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
 
-def _safe_load(path):
-    """torch.load compatibile con PyTorch vecchi/nuovi (weights_only facoltativo)."""
-    try:
-        return torch.load(path, map_location=device, weights_only=True)
-    except TypeError:
-        return torch.load(path, map_location=device)
-
+# Caricamento pesi con fallback (PyTorch >=2.4 ha weights_only)
 try:
-    state = _safe_load(MODEL_PATH)
-    model.load_state_dict(state)
-    print(f"[Model] Caricato: {MODEL_PATH}")
-except Exception as e:
-    print(f"[Model] Errore nel caricare {MODEL_PATH}: {e} → uso fallback.")
-    state = _safe_load(FALLBACK_PATH)
-    model.load_state_dict(state)
-    print(f"[Model] Caricato fallback: {FALLBACK_PATH}")
+    state = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+except TypeError:
+    state = torch.load(MODEL_PATH, map_location=device)
+model.load_state_dict(state)
+
+# Temperature scaling (se presente)
+TEMPERATURE = 1.0
+try:
+    with open(CALIB_PATH, 'r', encoding='utf-8') as f:
+        CALIB = json.load(f)
+        TEMPERATURE = float(CALIB.get('temperature', 1.0))
+    print(f"[CALIB] Temperature scaling attivo: T={TEMPERATURE}")
+except Exception:
+    print("[CALIB] Nessuna calibrazione trovata. Uso T=1.0")
 
 model.to(device)
 model.eval()
 
-# --- Trasformazioni coerenti con il training ---
+# Trasformazioni immagine (coerenti con il training)
 transform = transforms.Compose([
-    transforms.Resize(256),
+    transforms.Resize((256)),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
 ])
 
-# --- Helper softmax con temperatura (per probabilità calibrate) ---
-def softmax_with_temperature(logits_1d, T: float = 1.0):
-    return torch.softmax(logits_1d / T, dim=0)
 
-# --- Upload: estensioni consentite ---
-ALLOWED_EXT = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
-def allowed_file(filename: str) -> bool:
-    return os.path.splitext(filename)[1].lower() in ALLOWED_EXT
+# ========================== Decoratori & helpers ==========================
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated or getattr(current_user, 'role', 'user') != 'admin':
+            abort(403)
+        return f(*args, **kwargs)
+    return wrapper
+
+def _hash_user_id(user_id: str) -> str:
+    """Hash HMAC-SHA256 dell'ID utente usando un 'pepper' da .env (USER_HASH_PEPPER)."""
+    pepper = os.environ.get('USER_HASH_PEPPER', 'pepper-default-change-me')
+    return hmac.new(pepper.encode('utf-8'), str(user_id).encode('utf-8'), hashlib.sha256).hexdigest()
+
+def compute_label_and_weight(doc):
+    """
+    Determina label_final, label_source, weight per l'export.
+    Politica semplice:
+    - feedback == 'correct'                     -> label_final = predetta,        source='user_verified',  weight=1.0
+    - feedback == 'incorrect' + correzione     -> label_final = correzione,      source='user_corrected', weight=0.9
+    - altrimenti (non verificata)              -> label_final = predetta,        source='unverified',     weight=0.3
+    """
+    predicted = doc.get('class', '')
+    feedback  = (doc.get('feedback') or '').strip().lower()
+    corrected = (doc.get('correct_class_feedback') or '').strip().lower()
+
+    if feedback == 'correct' and predicted in CLASS_NAMES:
+        return predicted, 'user_verified', 1.0
+    if feedback == 'incorrect' and corrected in CLASS_NAMES:
+        return corrected, 'user_corrected', 0.9
+    if predicted in CLASS_NAMES:
+        return predicted, 'unverified', 0.3
+    return '', 'unverified', 0.3
+
+def materialize_image_local(doc, tmp_images_root: Path) -> Optional[Path]:
+    """
+    Copia l'immagine originale (salvata in UPLOAD_FOLDER) in una cartella temporanea e
+    ritorna il Path alla copia. Se manca, ritorna None.
+    """
+    fname = doc.get('image_filename')
+    if not fname:
+        return None
+    src = Path(app.config['UPLOAD_FOLDER']) / fname
+    if not src.exists():
+        return None
+    dst = tmp_images_root / fname
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
 
 
-# =============================================================================
-# Middleware
-# =============================================================================
+# ========================== Middleware ==========================
 # Idle timeout
 @app.before_request
 def idle_logout():
@@ -203,8 +264,7 @@ def idle_logout():
         return redirect(url_for('login'))
     session['last_seen'] = now_ts
 
-# Blocca la navigazione con predizione pendente
-# → CONSENTE solo: app, predict, feedback, upload file, auth, static.
+# Blocca navigazione con predizione pendente (consente: app, predict, feedback, upload, auth, static, dashboard)
 @app.before_request
 def force_feedback_before_navigation():
     if not current_user.is_authenticated:
@@ -212,28 +272,25 @@ def force_feedback_before_navigation():
     pending_id = session.get('pending_prediction_id')
     if not pending_id:
         return
-
-    allowed_endpoints = {
-        'app', 'predict', 'submit_feedback', 'uploaded_file',
-        'login', 'register', 'logout', 'static', 'model_info'
-    }
+    allowed_endpoints = {'app', 'predict', 'submit_feedback', 'uploaded_file',
+                         'login', 'register', 'logout', 'static', 'dashboard'}
     endpoint = (request.endpoint or '')
     if request.method == 'GET' and endpoint not in allowed_endpoints:
         flash('Conferma prima la predizione in corso per proseguire.', 'error')
         return redirect(url_for('app'))
 
-# Helper per {{ now() }} nei template
+# Helper per template
 @app.context_processor
 def inject_now():
-    return {'now': datetime.datetime.now}
+    return {
+        'now': datetime.datetime.now,
+        'is_admin': (getattr(current_user, 'role', 'user') == 'admin') if current_user.is_authenticated else False
+    }
 
 
-# =============================================================================
-# Routes
-# =============================================================================
+# ========================== Routes ==========================
 @app.route('/')
 def landing():
-    # Avviso di eventuali vecchie pending se non c'è una pending in sessione
     pending_count = 0
     if current_user.is_authenticated and not session.get('pending_prediction_id'):
         pending_count = predictions_collection.count_documents({
@@ -241,6 +298,7 @@ def landing():
             'feedback': None
         })
     return render_template('landing.html', pending_count=pending_count)
+
 
 @app.route('/app', endpoint='app')
 @login_required
@@ -260,8 +318,8 @@ def classify():
                 'conf': doc.get('confidence'),
                 'img': doc.get('image_filename')
             }
-    return render_template('index.html', form=form,
-                           class_names=CLASS_NAMES, preload=preload)
+    return render_template('index.html', form=form, class_names=CLASS_NAMES, preload=preload)
+
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -276,11 +334,13 @@ def register():
             return render_template('register.html', form=form)
         users_collection.insert_one({
             'username': username,
-            'password': generate_password_hash(password)
+            'password': generate_password_hash(password),
+            'role': 'user'
         })
         flash('Registrazione completata! Ora accedi.', 'success')
         return redirect(url_for('login'))
     return render_template('register.html', form=form)
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -300,12 +360,14 @@ def login():
         flash('Credenziali errate.', 'error')
     return render_template('login.html', form=form)
 
+
 @app.route('/logout')
 def logout():
     logout_user()
     session.clear()
     flash('Logout effettuato.', 'info')
     return redirect(url_for('landing'))
+
 
 @app.route('/dashboard')
 @login_required
@@ -325,46 +387,59 @@ def dashboard():
         pending_exists=pending_exists
     )
 
-# --------------------------- PREDICT -----------------------------------------
+
 @app.route('/predict', methods=['POST'])
 @login_required
 def predict():
+    """
+    Riceve un file immagine via form-data -> salva -> valida -> inferenza -> salva esito in Mongo -> ritorna JSON.
+    """
     if 'file' not in request.files or request.files['file'].filename == '':
         return jsonify({'error': 'Nessun file inviato.'}), 400
 
     file = request.files['file']
 
-    # Validazione estensione + sanitizzazione nome file
-    if not allowed_file(file.filename):
-        return jsonify({'error': 'Formato non supportato. Usa jpg/png/bmp/webp.'}), 400
-    safe_name = secure_filename(file.filename)
-    unique_filename = f"{uuid.uuid4()}_{safe_name}"
-    filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
+    # Validazione tipo MIME
+    mime = file.mimetype or ''
+    if mime not in ALLOWED_MIME:
+        return jsonify({'error': 'Formato non supportato. Usa JPG/PNG/WebP.'}), 400
 
-    # Salva e valida l'immagine
+    # Costruzione nome sicuro e path destinazione
+    # Se l'utente carica "senza estensione", usiamo quella dedotta dal MIME
+    base_name = secure_filename(file.filename) or f"upload_{uuid.uuid4().hex}"
+    root, ext = os.path.splitext(base_name)
+    if ext.lower() not in ('.jpg', '.jpeg', '.png', '.webp'):
+        ext = MIME_TO_EXT.get(mime, '.jpg')
+    unique_filename = f"{uuid.uuid4().hex}_{root}{ext}"
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+
+    # Salvataggio + validazione immagine
     try:
         file.save(filepath)
-        Image.open(filepath).verify()             # check rapido (header)
-        img = Image.open(filepath).convert('RGB') # riapri per trasformazioni
+        Image.open(filepath).verify()  # quick sanity check
+        img = Image.open(filepath).convert('RGB')
     except (UnidentifiedImageError, OSError):
         if os.path.exists(filepath):
             os.remove(filepath)
         return jsonify({'error': 'File non valido o danneggiato.'}), 400
 
-    # Inference
+    # Inferenza
     input_tensor = transform(img).unsqueeze(0).to(device)
     with torch.no_grad():
-        logits = model(input_tensor)[0]
-        probs = softmax_with_temperature(logits, TEMPERATURE)
-        conf, idx = torch.max(probs, 0)
+        logits = model(input_tensor)
+        if TEMPERATURE and TEMPERATURE != 1.0:
+            logits = logits / TEMPERATURE
+        probabilities = torch.nn.functional.softmax(logits[0], dim=0)
+        prob_val, pred_idx = torch.max(probabilities, 0)
+        predicted_class = CLASS_NAMES[pred_idx.item()]
 
-    predicted_class = CLASS_NAMES[idx.item()]
-    confidence_pct = f"{conf.item() * 100:.2f}%"
+    prob_float = float(prob_val.item())
 
-    # Salva su DB e “blocca” la UI finché non arriva il feedback
+    # Persistenza
     prediction_data = {
         'class': predicted_class,
-        'confidence': confidence_pct,
+        'confidence': f"{prob_float * 100:.2f}%",
+        'prob': prob_float,  # utile per filtri export
         'timestamp': datetime.datetime.now(),
         'image_filename': unique_filename,
         'user_id': current_user.id,
@@ -376,11 +451,12 @@ def predict():
 
     return jsonify({
         'class': predicted_class,
-        'confidence': confidence_pct,
+        'confidence': f"{prob_float * 100:.2f}%",
         'prediction_id': str(inserted_id)
     })
 
-# ---- FEEDBACK: esente da CSRF (API) ----
+
+# ---- FEEDBACK (CSRF esente) ----
 @app.route('/feedback', methods=['POST'])
 @login_required
 @csrf.exempt
@@ -412,7 +488,7 @@ def submit_feedback():
 
     return jsonify({'message': 'Feedback salvato.'}), 200
 
-# Servizio immagini caricate (ACL: solo proprietario)
+
 @app.route('/uploads/<filename>')
 @login_required
 def uploaded_file(filename):
@@ -421,25 +497,134 @@ def uploaded_file(filename):
         abort(403)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# -------------------------- Diagnostica modello -------------------------------
-@app.route('/model_info')
-def model_info():
-    info = {
-        'classes': CLASS_NAMES,
-        'num_classes': len(CLASS_NAMES),
-        'temperature': TEMPERATURE,
-        'model_loaded': ('best_model_stage2.pth' if os.path.exists('best_model_stage2.pth') else 'best_model_finetuned_light.pth')
-    }
-    return jsonify(info)
 
-# -------------------------- Error handlers -----------------------------------
-@app.errorhandler(RequestEntityTooLarge)
-def handle_file_too_large(e):
-    return jsonify({'error': 'File troppo grande. Max 10MB.'}), 413
+# ========================== EXPORT (SOLO ADMIN) ==========================
+@app.route('/export', methods=['GET'])
+@login_required
+@admin_required
+def export_page():
+    return render_template('export.html', class_names=CLASS_NAMES)
+
+@app.route('/export', methods=['POST'])
+@login_required
+@admin_required
+def do_export():
+    """
+    Esporta ZIP con:
+      /dataset.csv
+      /images/<classe>/<filename>
+    con pesi/etichette calcolati da compute_label_and_weight().
+    """
+    include_unverified = request.form.get('include_unverified') == 'on'
+    include_user_hash  = request.form.get('include_user_hash') == 'on'
+    scope_all          = request.form.get('scope') == 'all'  # 'all' o 'mine'
+
+    try:
+        min_conf_filter = float(request.form.get('min_conf', '0') or 0)
+    except Exception:
+        min_conf_filter = 0.0
+
+    date_from_str = (request.form.get('date_from') or '').strip()
+    date_to_str   = (request.form.get('date_to') or '').strip()
+
+    q: dict = {}
+    if not scope_all:
+        q['user_id'] = current_user.id
+
+    if date_from_str:
+        try:
+            dt = datetime.datetime.fromisoformat(date_from_str)
+            q.setdefault('timestamp', {})['$gte'] = dt
+        except Exception:
+            pass
+    if date_to_str:
+        try:
+            dt = datetime.datetime.fromisoformat(date_to_str)
+            q.setdefault('timestamp', {})['$lte'] = dt
+        except Exception:
+            pass
+
+    preds = list(predictions_collection.find(q).sort('timestamp', -1))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        images_root = tmp / "images"
+        images_root.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        copied = 0
+        skipped_missing = 0
+
+        for d in preds:
+            # filtra per confidenza minima (se presente)
+            if d.get('prob') is not None and float(d.get('prob')) < min_conf_filter:
+                continue
+
+            label_final, label_source, weight = compute_label_and_weight(d)
+
+            # se non verificata e non richiesta -> skip
+            if (label_source == 'unverified') and not include_unverified:
+                continue
+
+            # copia immagine
+            local_file = materialize_image_local(d, images_root)
+            if not local_file or not local_file.exists():
+                skipped_missing += 1
+                continue
+
+            # sotto-cartella = classe finale (o 'unverified')
+            sub = label_final if label_final in CLASS_NAMES else 'unverified'
+            target_dir = images_root / sub
+            target_dir.mkdir(exist_ok=True, parents=True)
+            final_path = target_dir / local_file.name
+            shutil.move(str(local_file), str(final_path))
+            copied += 1
+
+            # riga CSV
+            row = {
+                'id': str(d.get('_id')),
+                'filename': final_path.name,
+                'label_final': label_final,
+                'label_source': label_source,
+                'weight': f"{weight:.4f}",
+                'model_confidence': f"{float(d.get('prob') or 0.0):.6f}",
+                'feedback': d.get('feedback') or '',
+                'correct_class_feedback': d.get('correct_class_feedback') or '',
+                'timestamp': (d.get('timestamp') or datetime.datetime.utcnow()).isoformat()
+            }
+            if include_user_hash:
+                row['user_hash'] = _hash_user_id(d.get('user_id'))
+
+            rows.append(row)
+
+        # CSV
+        csv_path = tmp / "dataset.csv"
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                'id','filename','label_final','label_source','weight',
+                'model_confidence','feedback','correct_class_feedback','timestamp'
+            ]
+            if include_user_hash:
+                fieldnames.append('user_hash')
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        # ZIP in memoria
+        zip_name = f"smart_waste_export_{datetime.datetime.utcnow():%Y%m%d_%H%M%S}.zip"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.write(csv_path, arcname="dataset.csv")
+            for p in images_root.rglob('*'):
+                if p.is_file():
+                    z.write(p, arcname=str(p.relative_to(tmp)))
+        buffer.seek(0)
+
+        print(f"[EXPORT] copiati: {copied}, mancanti: {skipped_missing}, righe CSV: {len(rows)}")
+        return send_file(buffer, as_attachment=True, download_name=zip_name, mimetype='application/zip')
 
 
-# =============================================================================
-# Run
-# =============================================================================
+# ========================== Run ==========================
 if __name__ == '__main__':
+    # In produzione: host='0.0.0.0', debug=False
     app.run(debug=True, host='127.0.0.1', port=5000)

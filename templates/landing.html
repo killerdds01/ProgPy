@@ -1,49 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Benvenuto · Smart Waste{% endblock %}
-
+{% block title %}Benvenuto • Smart Waste{% endblock %}
 {% block content %}
-<div class="grid md:grid-cols-2 gap-8 items-start">
-  <div>
-    <h1 class="text-4xl md:text-5xl font-extrabold text-emerald-400">Classificazione intelligente dei rifiuti</h1>
-    <p class="mt-4 text-gray-300">
-      Smart Waste usa il deep learning per riconoscere <strong>plastica, carta, vetro, organico e indifferenziato</strong>
-      a partire da una foto. Confermando i risultati, ci aiuti a migliorare il modello.
-    </p>
-    <ul class="mt-4 text-gray-300 list-disc list-inside space-y-1">
-      <li>Upload immagine con anteprima</li>
-      <li>Risultato istantaneo + feedback</li>
-      <li>Storico personale in dashboard</li>
-    </ul>
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-semibold mb-3">Benvenuto in Smart Waste</h1>
+  <p class="text-gray-300 mb-4">
+    Carica una foto di un rifiuto e aiutaci a migliorare il modello dando feedback sulle predizioni.
+  </p>
 
-    {% if current_user.is_authenticated %}
-      {% if pending_count and pending_count > 0 %}
-        <div class="mt-6 rounded-lg border border-amber-700 bg-amber-900/40 text-amber-100 px-4 py-3">
-          Hai <strong>{{ pending_count }}</strong> predizion{{ 'e' if pending_count==1 else 'i' }} senza conferma.
-          <a href="{{ url_for('dashboard') }}" class="underline">Vai in Dashboard</a> per completarle.
-        </div>
-      {% endif %}
-      <div class="mt-6 flex gap-3">
-        <a href="{{ url_for('app') }}" class="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">Inizia a classificare</a>
-        <a href="{{ url_for('dashboard') }}" class="px-5 py-3 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-100">Vai alla Dashboard</a>
-      </div>
-    {% else %}
-      <div class="mt-6 flex gap-3">
-        <a href="{{ url_for('login') }}" class="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold">Accedi</a>
-        <a href="{{ url_for('register') }}" class="px-5 py-3 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-100">Registrati</a>
+  {% if current_user.is_authenticated %}
+    {% if pending_count and pending_count > 0 %}
+      <div class="mb-4 text-sm text-amber-200">
+        Hai {{ pending_count }} predizione/i non confermate. <a class="underline" href="{{ url_for('app') }}">Conferma ora</a>.
       </div>
     {% endif %}
-  </div>
-
-  <div class="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
-    <h3 class="text-emerald-300 font-semibold mb-2">Come funziona</h3>
-    <ol class="list-decimal list-inside text-gray-300 space-y-1">
-      <li>Carica la foto del rifiuto.</li>
-      <li>Vedi la classe e la confidenza.</li>
-      <li>Conferma o correggi il risultato.</li>
-    </ol>
-    <p class="text-sm text-gray-400 mt-3">
-      Il tuo feedback è prezioso: le immagini confermate o corrette vengono usate per migliorare il modello.
-    </p>
-  </div>
+    <a href="{{ url_for('app') }}" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Vai alla classificazione</a>
+  {% else %}
+    <div class="flex gap-3">
+      <a href="{{ url_for('login') }}" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Accedi</a>
+      <a href="{{ url_for('register') }}" class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-600">Registrati</a>
+    </div>
+  {% endif %}
 </div>
 {% endblock %}
