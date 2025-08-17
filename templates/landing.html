@@ -1,24 +1,35 @@
 {% extends "base.html" %}
-{% block title %}Benvenuto • Smart Waste{% endblock %}
+{% block title %}Smart Waste{% endblock %}
 {% block content %}
-<div class="max-w-3xl mx-auto">
-  <h1 class="text-2xl font-semibold mb-3">Benvenuto in Smart Waste</h1>
-  <p class="text-gray-300 mb-4">
-    Carica una foto di un rifiuto e aiutaci a migliorare il modello dando feedback sulle predizioni.
-  </p>
+<section class="max-w-3xl mx-auto">
+  <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-8 card-hover">
+    <h1 class="text-2xl font-semibold mb-3">Benvenuto su Smart Waste</h1>
+    <p class="text-gray-300 mb-4">
+      Classifica i rifiuti con l’AI, correggi gli errori e costruisci un dataset
+      migliore per il riaddestramento del modello.
+    </p>
 
-  {% if current_user.is_authenticated %}
-    {% if pending_count and pending_count > 0 %}
-      <div class="mb-4 text-sm text-amber-200">
-        Hai {{ pending_count }} predizione/i non confermate. <a class="underline" href="{{ url_for('app') }}">Conferma ora</a>.
-      </div>
-    {% endif %}
-    <a href="{{ url_for('app') }}" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Vai alla classificazione</a>
-  {% else %}
+    <ul class="list-disc list-inside text-gray-300 space-y-1 mb-6">
+      <li>Carica un’immagine e ottieni una predizione immediata.</li>
+      <li>Conferma o correggi la classe per migliorare l’algoritmo.</li>
+      <li>Se sei admin, esporta dataset e immagini con filtri GDPR-friendly.</li>
+    </ul>
+
     <div class="flex gap-3">
-      <a href="{{ url_for('login') }}" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Accedi</a>
-      <a href="{{ url_for('register') }}" class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-600">Registrati</a>
+      {% if current_user.is_authenticated %}
+        <a href="{{ url_for('app') }}" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 btn-pulse">Inizia a classificare</a>
+        <a href="{{ url_for('dashboard') }}" class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">Vai alla dashboard</a>
+      {% else %}
+        <a href="{{ url_for('login') }}" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Accedi</a>
+        <a href="{{ url_for('register') }}" class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">Registrati</a>
+      {% endif %}
     </div>
-  {% endif %}
-</div>
+
+    {% if current_user.is_authenticated and pending_count %}
+      <p class="text-amber-200 text-sm mt-4">
+        Hai {{ pending_count }} predizion{{ 'e' if pending_count == 1 else 'i' }} in attesa di conferma.
+      </p>
+    {% endif %}
+  </div>
+</section>
 {% endblock %}

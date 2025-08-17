@@ -1,3 +1,50 @@
-
-.env
+# === Dati locali / sensibili ===
+mongo_data/
 uploaded_images/
+profile_photos/
+exports/
+*.zip
+*.csv
+
+# === Segreti ===
+.env
+*.key
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+
+# === Virtual env ===
+.venv/
+venv/
+env/
+ENV/
+
+# === Build / packaging ===
+build/
+dist/
+*.egg-info/
+
+# === Log & cache ===
+*.log
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+coverage.xml
+htmlcov/
+
+# === IDE / OS ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Modelli / binari grandi ===
+*.pth
+*.pt
+*.onnx
+*.h5

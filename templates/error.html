@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Errore {{ code }} • Smart Waste{% endblock %}
+{% block content %}
+<div class="max-w-lg mx-auto text-center">
+  <img class="mx-auto rounded-lg border border-gray-800" alt="http.cat {{ code }}" src="https://http.cat/{{ code }}">
+  <p class="mt-3 text-gray-300">{{ message }}</p>
+</div>
+{% endblock %}

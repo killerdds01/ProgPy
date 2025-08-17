@@ -1,73 +1,311 @@
 {% extends "base.html" %}
 {% block title %}Dashboard • Smart Waste{% endblock %}
+
+{# Se il tuo base.html supporta head_extra, lasciami mettere il token qui #}
+{% block head_extra %}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+{% endblock %}
+
 {% block content %}
-<h1 class="text-xl font-semibold mb-4">Le mie predizioni</h1>
 
-{% if pending_exists %}
-  <div class="mb-4 text-sm text-amber-200">
-    ⚠️ Hai una predizione in attesa di conferma. Vai alla <a class="underline" href="{{ url_for('app') }}">pagina di classificazione</a>.
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-semibold">Dashboard</h1>
+  <div class="flex items-center gap-2">
+    <a href="{{ url_for('account_export') }}"
+       class="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-sm">
+      Scarica i miei dati (JSON)
+    </a>
+    {% if is_admin %}
+      <a href="{{ url_for('export_page') }}"
+         class="px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-sm">
+        Export dataset (admin)
+      </a>
+    {% endif %}
   </div>
-{% endif %}
+</div>
 
-<div class="grid md:grid-cols-5 gap-3 mb-6">
+<!-- FILTRI -->
+<form method="GET"
+      class="bg-gray-900/60 border border-gray-800 rounded-xl p-4 mb-6 grid md:grid-cols-6 gap-3 items-end">
+  <div>
+    <label class="block text-xs mb-1">Classe</label>
+    <select name="class" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+      <option value="">Tutte</option>
+      {% for c in class_names %}
+        <option value="{{ c }}" {% if f_class==c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs mb-1">Stato</label>
+    <select name="state" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+      <option value="all" {% if f_state=='all' %}selected{% endif %}>Tutti</option>
+      <option value="pending" {% if f_state=='pending' %}selected{% endif %}>Da confermare</option>
+      <option value="correct" {% if f_state=='correct' %}selected{% endif %}>Predette correttamente</option>
+      <option value="incorrect" {% if f_state=='incorrect' %}selected{% endif %}>Corrette dall’utente</option>
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs mb-1">Da</label>
+    <input type="date" name="from" value="{{ f_from }}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+  </div>
+  <div>
+    <label class="block text-xs mb-1">A</label>
+    <input type="date" name="to" value="{{ f_to }}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+  </div>
+  <div class="flex items-center gap-2">
+    <input type="checkbox" id="noi" name="no_images" value="1" {% if no_images %}checked{% endif %}>
+    <label for="noi" class="text-sm">Nascondi anteprime</label>
+  </div>
+  <div>
+    <button class="w-full px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Filtra</button>
+  </div>
+</form>
+
+<!-- STATISTICHE VELOCI -->
+<div class="grid sm:grid-cols-5 gap-3 mb-6">
   {% for c in class_names %}
-    <div class="bg-gray-900/60 border border-gray-800 rounded-lg p-4">
-      <div class="text-sm text-gray-400">{{ c }}</div>
-      <div class="text-2xl font-semibold">{{ class_counts.get(c, 0) }}</div>
+    <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-3 text-sm flex items-center justify-between">
+      <span class="text-gray-300">{{ c|capitalize }}</span>
+      <span class="font-semibold text-emerald-300">{{ class_counts[c] }}</span>
     </div>
   {% endfor %}
 </div>
 
-<div class="overflow-x-auto rounded-lg border border-gray-800">
-  <table class="min-w-full text-sm">
-    <thead class="bg-gray-900/60">
-      <tr>
-        <th class="px-3 py-2 text-left">Immagine</th>
-        <th class="px-3 py-2 text-left">Classe</th>
-        <th class="px-3 py-2 text-left">Conf.</th>
-        <th class="px-3 py-2 text-left">Stato</th>
-        <th class="px-3 py-2 text-left">Data</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for p in predictions %}
-        <tr class="border-t border-gray-800">
-          <td class="px-3 py-2">
+<!-- LISTA PREDIZIONI -->
+{% if predictions|length == 0 %}
+  <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-6 text-gray-300">
+    Nessun risultato con i filtri correnti.
+  </div>
+{% else %}
+  <div class="grid lg:grid-cols-2 gap-4">
+    {% for p in predictions %}
+      {% set is_pending   = (p.feedback is none) %}
+      {% set is_correct   = (p.feedback == 'correct') %}
+      {% set is_incorrect = (p.feedback == 'incorrect') %}
+
+      <article class="bg-gray-900/60 border border-gray-800 rounded-xl p-4 card-hover" data-id="{{ p['_id'] }}">
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-sm">{{ p.class }}</span>
+
+            <span data-status-pill
+                  class="text-xs px-2 py-1 rounded
+                         {% if is_pending %} bg-amber-900/40 border border-amber-800 text-amber-200
+                         {% elif is_correct %} bg-emerald-900/40 border border-emerald-800 text-emerald-200
+                         {% elif is_incorrect %} bg-rose-900/40 border border-rose-800 text-rose-200
+                         {% endif %}">
+              {% if is_pending %}Da confermare{% elif is_correct %}Predetta correttamente{% else %}Corretta dall’utente (predizione errata){% endif %}
+            </span>
+          </div>
+          <div class="text-xs text-gray-400">
+            {{ p.timestamp.strftime('%Y-%m-%d %H:%M') if p.timestamp }}
+          </div>
+        </div>
+
+        <div class="mt-3 flex gap-4">
+          {% if not no_images %}
             {% if p.image_filename %}
-              <img src="{{ url_for('uploaded_file', filename=p.image_filename) }}" alt="" class="h-16 w-16 object-cover rounded">
-            {% endif %}
-          </td>
-          <td class="px-3 py-2">
-            <span class="px-2 py-1 rounded bg-gray-800 border border-gray-700">{{ p['class'] }}</span>
-          </td>
-          <td class="px-3 py-2">{{ p.get('confidence','') }}</td>
-          <td class="px-3 py-2">
-            {% if p.get('feedback') %}
-              {% if p.get('feedback') == 'correct' %}
-                <span class="text-emerald-300">✔️ corretta</span>
-              {% else %}
-                <span class="text-rose-300">✏️ corretta dall'utente</span>
-              {% endif %}
-              {% if p.get('validated') is not none %}
-                {% if p.get('validated') %}
-                  <span class="ml-2 text-emerald-400">(validata)</span>
-                {% else %}
-                  <span class="ml-2 text-rose-400">(non validata)</span>
-                {% endif %}
-              {% endif %}
+              <img src="{{ url_for('uploaded_file', filename=p.image_filename) }}"
+                   alt=""
+                   class="w-28 h-28 object-cover rounded border border-gray-800">
             {% else %}
-              <span class="text-amber-300">in attesa</span>
+              <div class="w-28 h-28 rounded border border-gray-800 flex items-center justify-center text-gray-500 text-xs">
+                immagine non disponibile
+              </div>
             {% endif %}
-            {% if p.get('needs_review') and p.get('feedback') is none %}
-              <span class="ml-2 px-2 py-0.5 rounded bg-amber-900/50 border border-amber-800 text-amber-200">serve revisione</span>
+          {% endif %}
+
+          <div class="flex-1 min-w-0">
+            <div class="text-sm text-gray-300">
+              Confidenza:
+              <span class="font-semibold">{{ p.confidence }}</span>
+              {% if p.prob is defined %}
+                <span class="text-xs text-gray-500"> ({{ '%0.3f'|format(p.prob) }})</span>
+              {% endif %}
+            </div>
+
+            <!-- riga "Correzione utente" gestita anche live -->
+            <div class="mt-1 text-sm text-gray-300 {% if not (is_incorrect and p.correct_class_feedback) %}hidden{% endif %}"
+                 data-correction-line>
+              Correzione utente:
+              <span class="font-semibold" data-correction-value>
+                {% if is_incorrect and p.correct_class_feedback %}{{ p.correct_class_feedback }}{% endif %}
+              </span>
+            </div>
+
+            {% if is_pending %}
+              <div class="mt-3 space-y-2" data-actions>
+                <div class="flex gap-2 flex-wrap">
+                  <button class="px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-sm btn-confirm"
+                          data-pid="{{ p['_id'] }}">
+                    ✓ Conferma (è corretta)
+                  </button>
+
+                  <button class="px-3 py-2 rounded-lg bg-rose-700 hover:bg-rose-600 text-sm btn-open-incorrect"
+                          data-pid="{{ p['_id'] }}">
+                    ✕ Segna errata
+                  </button>
+                </div>
+
+                <div class="hidden items-center gap-2 flex-wrap" data-correction-panel>
+                  <select class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" data-correct-class>
+                    {% for c in class_names %}
+                      <option value="{{ c }}" {% if c == p.class %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="px-3 py-2 rounded-lg bg-rose-700 hover:bg-rose-600 text-sm btn-send-correction"
+                          data-pid="{{ p['_id'] }}">
+                    ✎ Invia correzione
+                  </button>
+                  <button class="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-sm btn-cancel-correction">
+                    Annulla
+                  </button>
+                </div>
+              </div>
             {% endif %}
-          </td>
-          <td class="px-3 py-2">
-            {{ p.get('timestamp').strftime('%d/%m/%Y %H:%M') if p.get('timestamp') else '' }}
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+          </div>
+        </div>
+
+        <div class="mt-3 flex items-center justify-between">
+          <div class="text-xs text-gray-500">ID: {{ p['_id'] }}</div>
+          <form method="POST" action="{{ url_for('delete_prediction', pid=p['_id']) }}"
+                onsubmit="return confirm('Eliminare questa predizione? L’immagine verrà rimossa.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-sm">
+              Elimina
+            </button>
+          </form>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<!-- JS: azioni rapide con aggiornamento live -->
+<script>
+  const CSRF_TOKEN = "{{ csrf_token() }}";
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+
+  function getCard(pid) { return document.querySelector(`article[data-id="${pid}"]`); }
+
+  function setStatusPill(card, state) {
+    const pill = $('[data-status-pill]', card);
+    if (!pill) return;
+    // pulizia classi stato
+    pill.classList.remove('bg-amber-900/40','border-amber-800','text-amber-200',
+                          'bg-emerald-900/40','border-emerald-800','text-emerald-200',
+                          'bg-rose-900/40','border-rose-800','text-rose-200');
+    if (state === 'pending') {
+      pill.textContent = 'Da confermare';
+      pill.classList.add('bg-amber-900/40','border-amber-800','text-amber-200');
+    } else if (state === 'correct') {
+      pill.textContent = 'Predetta correttamente';
+      pill.classList.add('bg-emerald-900/40','border-emerald-800','text-emerald-200');
+    } else if (state === 'incorrect') {
+      pill.textContent = 'Corretta dall’utente (predizione errata)';
+      pill.classList.add('bg-rose-900/40','border-rose-800','text-rose-200');
+    }
+  }
+
+  function showCorrection(card, value) {
+    const line = $('[data-correction-line]', card);
+    const span = $('[data-correction-value]', card);
+    if (span) span.textContent = value || '';
+    if (line) line.classList.remove('hidden');
+  }
+
+  function hideActions(card) {
+    const actions = $('[data-actions]', card);
+    if (actions) actions.remove();
+  }
+
+  function openCorrection(card) {
+    const panel = $('[data-correction-panel]', card);
+    if (panel) panel.classList.remove('hidden');
+    const btnOpen = $('.btn-open-incorrect', card);
+    if (btnOpen) btnOpen.classList.add('hidden');
+  }
+
+  function closeCorrection(card) {
+    const panel = $('[data-correction-panel]', card);
+    if (panel) panel.classList.add('hidden');
+    const btnOpen = $('.btn-open-incorrect', card);
+    if (btnOpen) btnOpen.classList.remove('hidden');
+  }
+
+  async function sendFeedback(pid, type, correctClass=null) {
+    const body = { prediction_id: String(pid), feedback_type: type };
+    if (type === 'incorrect') body.correct_class = correctClass;
+
+    const res = await fetch("{{ url_for('submit_feedback') }}", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": CSRF_TOKEN
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  document.addEventListener('click', async (ev) => {
+    // CONFERMA CORRETTA
+    const btnConfirm = ev.target.closest('.btn-confirm');
+    if (btnConfirm) {
+      const pid = btnConfirm.dataset.pid;
+      const card = getCard(pid);
+      try {
+        await sendFeedback(pid, 'correct');
+        // Aggiorna live
+        setStatusPill(card, 'correct');
+        hideActions(card);
+      } catch (e) {
+        console.error(e); alert("Errore durante l'invio. Riprova.");
+      }
+      return;
+    }
+
+    // APRI PANNELLO CORREZIONE
+    const btnOpen = ev.target.closest('.btn-open-incorrect');
+    if (btnOpen) {
+      const card = getCard(btnOpen.dataset.pid);
+      openCorrection(card);
+      return;
+    }
+
+    // INVIA CORREZIONE
+    const btnSend = ev.target.closest('.btn-send-correction');
+    if (btnSend) {
+      const pid = btnSend.dataset.pid;
+      const card = getCard(pid);
+      const sel  = $('[data-correct-class]', card);
+      const value = sel ? sel.value : null;
+
+      if (!value) { alert("Seleziona la classe corretta."); return; }
+
+      try {
+        await sendFeedback(pid, 'incorrect', value);
+        // Aggiorna live
+        setStatusPill(card, 'incorrect');
+        showCorrection(card, value);
+        hideActions(card);
+      } catch (e) {
+        console.error(e); alert("Errore durante l'invio. Riprova.");
+      }
+      return;
+    }
+
+    // ANNULLA CORREZIONE
+    const btnCancel = ev.target.closest('.btn-cancel-correction');
+    if (btnCancel) {
+      const card = btnCancel.closest('article');
+      closeCorrection(card);
+    }
+  });
+</script>
+
 {% endblock %}

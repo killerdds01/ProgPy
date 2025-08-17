@@ -1,21 +1,62 @@
 {% extends "base.html" %}
-{% block title %}Registrati • Smart Waste{% endblock %}
+{% block title %}Registrazione • Smart Waste{% endblock %}
 {% block content %}
-<h1 class="text-xl font-semibold mb-4">Registrati</h1>
-<form method="POST" class="max-w-sm space-y-3">
-  {{ form.hidden_tag() }}
-  <div>
-    <label class="block text-sm mb-1">Username</label>
-    {{ form.username(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2") }}
-  </div>
-  <div>
-    <label class="block text-sm mb-1">Password</label>
-    {{ form.password(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2") }}
-  </div>
-  <!-- Honeypot (nascosto) -->
-  <div style="display:none;">
-    {{ form.website() }}
-  </div>
-  {{ form.submit(class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-600") }}
-</form>
+<div class="max-w-lg mx-auto bg-gray-900/60 border border-gray-800 rounded-xl p-6">
+  <h2 class="text-lg font-semibold mb-4">Crea un account</h2>
+  <form method="POST" class="space-y-4">
+    {{ form.hidden_tag() }}
+
+    <div>
+      <label class="block text-sm mb-1" for="{{ form.first_name.id }}">Nome</label>
+      {{ form.first_name(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2") }}
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1" for="{{ form.last_name.id }}">Cognome</label>
+      {{ form.last_name(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2") }}
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1" for="{{ form.email.id }}">Email</label>
+      {{ form.email(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2", autocomplete="email") }}
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1" for="{{ form.password.id }}">Password</label>
+      <div class="relative">
+        {{ form.password(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2", autocomplete="new-password") }}
+        <button type="button" id="toggle-pass" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs">👁</button>
+      </div>
+      <p class="text-xs text-gray-400 mt-1">Almeno 6 caratteri.</p>
+    </div>
+
+    <div>
+      <label class="block text-sm mb-1" for="{{ form.confirm.id }}">Conferma password</label>
+      <div class="relative">
+        {{ form.confirm(class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2", autocomplete="new-password") }}
+        <button type="button" id="toggle-pass2" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs">👁</button>
+      </div>
+    </div>
+
+    <div class="flex items-start gap-2">
+      {{ form.accept_tos() }}
+      <label class="text-sm text-gray-300">Accetto la privacy policy</label>
+    </div>
+
+    <div class="flex items-start gap-2">
+      {{ form.consent_training_default() }}
+      <label class="text-sm text-gray-300">Acconsento all’uso delle immagini per addestrare il modello (facoltativo).</label>
+    </div>
+
+    <button class="w-full px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Registrati</button>
+  </form>
+  <p class="text-sm text-gray-400 mt-3">Hai già un account? <a class="underline" href="{{ url_for('login') }}">Accedi</a>.</p>
+</div>
+
+<script>
+  const t1=document.getElementById('toggle-pass');
+  const t2=document.getElementById('toggle-pass2');
+  t1?.addEventListener('click', ()=>{ const f=document.getElementById('{{ form.password.id }}'); f.type=(f.type==='password'?'text':'password'); });
+  t2?.addEventListener('click', ()=>{ const f=document.getElementById('{{ form.confirm.id }}'); f.type=(f.type==='password'?'text':'password'); });
+</script>
 {% endblock %}

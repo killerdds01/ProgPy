@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Profilo • Smart Waste{% endblock %}
+{% block content %}
+
+<div class="grid lg:grid-cols-3 gap-6">
+  <!-- Colonna con foto + gestione profilo -->
+  <section class="lg:col-span-1 space-y-6">
+    <!-- Foto profilo -->
+    <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-6">
+      <h2 class="text-lg font-semibold mb-4">Foto profilo</h2>
+      <form method="POST" action="{{ url_for('profile_photo_upload') }}" enctype="multipart/form-data" class="space-y-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="relative w-32 h-32 mx-auto">
+          {% if user and user.profile_image %}
+            <img src="{{ url_for('profile_photo_get', filename=user.profile_image) }}"
+                 class="w-32 h-32 rounded-full object-cover border border-gray-700" alt="">
+          {% else %}
+            <div class="w-32 h-32 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center text-gray-500">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5Z"/>
+              </svg>
+            </div>
+          {% endif %}
+          <label for="photo"
+                 class="absolute inset-0 rounded-full bg-black/40 opacity-0 hover:opacity-100 transition flex items-center justify-center text-xs text-white">
+            Cambia foto
+          </label>
+          <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" onchange="this.form.submit()">
+        </div>
+        <p class="text-xs text-gray-500 text-center">Max 10MB – JPG/PNG/WebP. Ridimensionata automaticamente.</p>
+      </form>
+    </div>
+
+    <!-- Gestione profilo -->
+    <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-6">
+      <h2 class="text-lg font-semibold mb-4">Gestione profilo</h2>
+
+      <!-- Modifica dati -->
+      <details class="group mb-3">
+        <summary class="cursor-pointer select-none flex items-center justify-between py-2">
+          <span class="font-medium">Modifica dati</span>
+          <span class="text-gray-400 group-open:rotate-180 transition">&#9660;</span>
+        </summary>
+        <form method="POST" class="space-y-4 mt-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="grid gap-3">
+            <div>
+              <label class="block text-sm mb-1">Nome</label>
+              <input name="first_name" value="{{ user.first_name or '' }}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+            </div>
+            <div>
+              <label class="block text-sm mb-1">Cognome</label>
+              <input name="last_name" value="{{ user.last_name or '' }}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+            </div>
+            <div>
+              <label class="block text-sm mb-1">Email</label>
+              <input value="{{ user.email or '' }}" disabled
+                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 opacity-70 cursor-not-allowed">
+            </div>
+            <label class="flex items-start gap-2">
+              <input type="checkbox" name="consent_training_default" {% if user.consent_training_default %}checked{% endif %}>
+              <span class="text-sm text-gray-300">Acconsento all’uso delle mie immagini per addestrare il modello.</span>
+            </label>
+          </div>
+          <button class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">Salva</button>
+        </form>
+      </details>
+
+      <!-- Cambia password -->
+      <details class="group mb-3">
+        <summary class="cursor-pointer select-none flex items-center justify-between py-2">
+          <span class="font-medium">Cambia password</span>
+          <span class="text-gray-400 group-open:rotate-180 transition">&#9660;</span>
+        </summary>
+        <form method="POST" action="{{ url_for('profile_password') }}" class="grid gap-3 mt-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="relative">
+            <input type="password" name="old_password" placeholder="Password attuale"
+                   class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 pr-10">
+            <button type="button" class="eye-btn absolute right-2 top-2.5 text-gray-400" data-target="old_password" aria-label="Mostra/Nascondi">
+              👁️
+            </button>
+          </div>
+          <div class="relative">
+            <input type="password" name="new_password" placeholder="Nuova password"
+                   class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 pr-10">
+            <button type="button" class="eye-btn absolute right-2 top-2.5 text-gray-400" data-target="new_password" aria-label="Mostra/Nascondi">
+              👁️
+            </button>
+          </div>
+          <div class="relative">
+            <input type="password" name="confirm_password" placeholder="Conferma"
+                   class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 pr-10">
+            <button type="button" class="eye-btn absolute right-2 top-2.5 text-gray-400" data-target="confirm_password" aria-label="Mostra/Nascondi">
+              👁️
+            </button>
+          </div>
+          <button class="px-3 py-2 rounded bg-gray-800 hover:bg-gray-700 text-sm">Aggiorna password</button>
+        </form>
+      </details>
+
+      <!-- Elimina account -->
+      <details class="group">
+        <summary class="cursor-pointer select-none flex items-center justify-between py-2">
+          <span class="font-medium text-rose-300">Elimina account</span>
+          <span class="text-gray-400 group-open:rotate-180 transition">&#9660;</span>
+        </summary>
+        <form method="POST" action="{{ url_for('account_delete') }}" class="space-y-3 mt-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="password" name="password" placeholder="Conferma password"
+                 class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+          <button class="px-3 py-2 rounded bg-rose-700 hover:bg-rose-600 text-sm"
+                  onclick="return confirm('Eliminare definitivamente l’account?')">
+            Elimina definitivamente
+          </button>
+        </form>
+      </details>
+    </div>
+  </section>
+
+  <!-- Colonna vuota o futura (statistiche, ecc.) -->
+  <section class="lg:col-span-2">
+    <!-- Placeholder: puoi aggiungere qui stats o altro -->
+  </section>
+</div>
+
+<script src="{{ url_for('static', filename='js/profile.js') }}" defer></script>
+{% endblock %}

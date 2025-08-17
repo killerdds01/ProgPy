@@ -1,302 +1,87 @@
 {% extends "base.html" %}
 {% block title %}Classificazione • Smart Waste{% endblock %}
 {% block content %}
-<!--
-  Pagina di classificazione:
-  - Drag&drop o click per scegliere un file (JPG/PNG/WebP, 10MB)
-  - Preview locale
-  - Invio con CSRF a /predict (AJAX)
-  - Risultato + feedback corretto/errato
-  - Preload da eventuale predizione pendente
--->
 
-<div class="grid lg:grid-cols-2 gap-6 items-start">
-  <!-- ===================== UPLOAD ===================== -->
-  <section class="bg-gray-900/60 border border-gray-800 rounded-xl p-5">
-    <h2 class="text-lg font-semibold mb-2">Carica un'immagine</h2>
-    <p class="text-sm text-gray-400 mb-4">
-      Trascina qui una foto oppure premi “Scegli file”. JPG/PNG/WebP (max 10 MB).
-    </p>
-
-    <!-- Form nascosto solo per avere il token CSRF di Flask-WTF -->
-    <form id="upload-form" method="POST" action="{{ url_for('predict') }}" enctype="multipart/form-data" class="hidden">
-      {{ form.hidden_tag() }}
-      {{ form.submit() }}
-    </form>
-
-    <!-- Dropzone -->
+<div class="grid lg:grid-cols-12 gap-6">
+  <!-- Upload -->
+  <section class="lg:col-span-7 space-y-4">
     <div id="dropzone"
-         class="relative rounded-xl border-2 border-dashed border-gray-700 hover:border-emerald-600 transition-colors
-                flex items-center justify-center h-56 cursor-pointer">
-      <div class="text-center pointer-events-none">
-        <div class="text-4xl mb-2">🖼️</div>
-        <div class="font-medium">Trascina qui l'immagine</div>
-        <div class="text-sm text-gray-400">oppure clicca per selezionarla</div>
+         class="border-2 border-dashed border-gray-700 rounded-xl bg-gray-900/50 hover:bg-gray-900/70 transition p-6 cursor-pointer select-none">
+      <div class="flex flex-col items-center justify-center py-8 pointer-events-none">
+        <img src="{{ url_for('static', filename='img/upload.svg') }}" alt="" class="w-12 h-12 opacity-70 mb-3"
+             onerror="this.replaceWith(document.getElementById('svg-fallback').content.cloneNode(true))">
+        <p class="text-gray-300 font-medium">Trascina qui l'immagine</p>
+        <p class="text-gray-500 text-sm">oppure clicca per selezionarla (.JPG/.PNG/.WebP, max 10MB)</p>
       </div>
-      <input id="file-input" type="file" accept="image/*" class="absolute inset-0 opacity-0 cursor-pointer" />
+      <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" class="hidden">
     </div>
 
-    <!-- Stato/errore -->
-    <div id="upload-status" class="mt-3 hidden">
-      <div id="upload-msg" class="text-sm"></div>
+    <label class="inline-flex items-center gap-2 text-sm text-gray-300">
+      <input id="consentCheckbox" type="checkbox" class="accent-emerald-600" {% if user_default_consent %}checked{% endif %}>
+      <span>Consento l'uso di <span class="underline decoration-dotted">questa</span> immagine per addestrare il modello</span>
+    </label>
+
+    <div id="previewWrap" class="hidden bg-gray-900/60 border border-gray-800 rounded-xl p-4">
+      <div class="text-emerald-400 text-sm mb-2">Immagine pronta. Clicca sull’anteprima per cambiarla.</div>
+      <div class="aspect-video bg-black/20 rounded-lg overflow-hidden flex items-center justify-center">
+        <img id="previewImg" alt="Anteprima" class="max-h-[60vh] object-contain cursor-pointer">
+      </div>
     </div>
 
-    <!-- Preview -->
-    <div class="mt-4">
-      <img id="preview" class="max-h-64 rounded-lg border border-gray-800 hidden object-contain w-full bg-gray-950" alt="preview">
-      <div class="flex gap-2 mt-3">
-        <button id="btn-predict"
-                class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed hidden">
-          Predici
-        </button>
-        <button id="btn-clear"
-                class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 hidden">
-          Pulisci
-        </button>
-      </div>
+    <div class="flex gap-3">
+      <button id="predictBtn" class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed">Predici</button>
+      <button id="clearBtn"   class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700">Pulisci</button>
     </div>
   </section>
 
-  <!-- ===================== RISULTATO + FEEDBACK ===================== -->
-  <section class="bg-gray-900/60 border border-gray-800 rounded-xl p-5">
-    <h2 class="text-lg font-semibold mb-3">Risultato</h2>
+  <!-- Risultato -->
+  <aside class="lg:col-span-5">
+    <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-4 lg:sticky lg:top-4">
+      <h2 class="text-lg font-semibold mb-3">Risultato</h2>
 
-    <div id="result-box" class="hidden space-y-3">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="text-sm">Classe:</div>
-        <span id="pred-class"
-              class="px-2 py-1 rounded-md bg-emerald-900/50 border border-emerald-800 text-emerald-200 text-sm font-medium">
-        </span>
-        <div class="text-sm">Confidenza:</div>
-        <span id="pred-conf" class="px-2 py-1 rounded-md bg-gray-800 border border-gray-700 text-sm font-medium"></span>
+      <div id="resultEmpty" class="text-gray-400 text-sm">
+        Carica un'immagine e premi “Predici”.
       </div>
 
-      <input type="hidden" id="prediction-id">
-
-      <!-- Pulsanti feedback -->
-      <div class="grid gap-3">
-        <div class="grid gap-3 sm:grid-cols-2">
-          <button id="btn-correct"
-                  class="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed">
-            ✅ È corretta
-          </button>
-
-          <!-- mostro SOLO il bottone per iniziare la correzione -->
-          <button id="btn-start-correction"
-                  class="px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-600 disabled:opacity-50 disabled:cursor-not-allowed">
-            ✏️ Correggi
-          </button>
+      <div id="resultCard" class="hidden space-y-3">
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-gray-400">Classe:</span>
+          <span id="resClass" class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-sm">—</span>
+          <span class="ml-auto text-sm text-gray-400">Confidenza:</span>
+          <span id="resConf" class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-sm">—</span>
         </div>
 
-        <!-- box correzione (nascosto finché non si preme "Correggi") -->
-        <div id="correction-row" class="flex gap-2 items-center hidden">
-          <select id="correct-class"
-                  class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm">
-            {% for c in class_names %}
-              <option value="{{ c }}">{{ c }}</option>
-            {% endfor %}
+        <div id="actionsRow" class="flex items-center gap-3">
+          <button id="btnCorrect" class="flex-1 px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600">✓ È corretta</button>
+          <button id="btnWrong"   class="flex-1 px-4 py-2 rounded-lg bg-rose-700    hover:bg-rose-600">✖ È sbagliata</button>
+        </div>
+
+        <div id="correctionRow" class="hidden flex items-center gap-3">
+          <select id="correctionSelect" class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+            {% for c in class_names %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
           </select>
-          <button id="btn-incorrect"
-                  class="px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-600 disabled:opacity-50 disabled:cursor-not-allowed">
-            Invia correzione
-          </button>
-          <button id="btn-cancel-correction"
-                  class="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700">
-            Annulla
-          </button>
+          <button id="sendCorrection" class="px-4 py-2 rounded-lg bg-rose-700 hover:bg-rose-600">✎ Invia correzione</button>
         </div>
+
+        <div id="resultMsg" class="hidden text-sm"></div>
       </div>
-
-      <p id="result-msg" class="text-sm text-gray-300"></p>
     </div>
-
-    <div id="busy" class="hidden mt-2 text-sm text-gray-400">⏳ Elaborazione in corso…</div>
-
-    <!-- Preload da pending (riempito lato server) -->
-    {% if preload %}
-      <div id="server-preload"
-           data-id="{{ preload.id }}"
-           data-cls="{{ preload.cls }}"
-           data-conf="{{ preload.conf }}"
-           data-img="{{ url_for('uploaded_file', filename=preload.img) }}"></div>
-    {% endif %}
-  </section>
+  </aside>
 </div>
 
-<script>
-  // ========= RIFERIMENTI =========
-  const dz        = document.getElementById('dropzone');
-  const fileInput = document.getElementById('file-input');
-  const preview   = document.getElementById('preview');
+<!-- Fallback per l’icona upload (se l’SVG non si carica) -->
+<template id="svg-fallback">
+  <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 opacity-70 mb-3" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M19 15v4H5v-4H3v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4Zm-7-1 3.5 3.5-1.42 1.42L13 17.83V9h-2v8.83l-1.08 1.09L8.5 17Z"/>
+  </svg>
+</template>
 
-  const uploadForm = document.getElementById('upload-form');
-  const csrfToken  = uploadForm.querySelector('input[name="csrf_token"]');
-
-  const btnPredict = document.getElementById('btn-predict');
-  const btnClear   = document.getElementById('btn-clear');
-  const statusBox  = document.getElementById('upload-status');
-  const statusMsg  = document.getElementById('upload-msg');
-
-  const box      = document.getElementById('result-box');
-  const predCls  = document.getElementById('pred-class');
-  const predConf = document.getElementById('pred-conf');
-  const predId   = document.getElementById('prediction-id');
-  const msg      = document.getElementById('result-msg');
-
-  const btnCorrect   = document.getElementById('btn-correct');
-  const btnStartCorr = document.getElementById('btn-start-correction');
-  const corrRow      = document.getElementById('correction-row');
-  const btnIncorrect = document.getElementById('btn-incorrect');
-  const btnCancelCorr= document.getElementById('btn-cancel-correction');
-  const correctSel   = document.getElementById('correct-class');
-  const busy         = document.getElementById('busy');
-
-  // ========= UTILS =========
-  function show(el){ el.classList.remove('hidden'); }
-  function hide(el){ el.classList.add('hidden'); }
-  function enable(el){ el.removeAttribute('disabled'); }
-  function disable(el){ el.setAttribute('disabled', 'disabled'); }
-
-  function setStatus(type, text) {
-    statusMsg.textContent = text;
-    statusMsg.className =
-      'text-sm ' + (type === 'error' ? 'text-rose-300' :
-                    type === 'ok'    ? 'text-emerald-300' : 'text-gray-300');
-    show(statusBox);
-  }
-
-  function clearUI() {
-    uploadForm.reset();
-    fileInput.value = '';
-    hide(preview); hide(box); hide(statusBox);
-    hide(corrRow); show(btnStartCorr);
-    msg.textContent = '';
-    disable(btnPredict); hide(btnPredict); hide(btnClear);
-  }
-
-  function setPreviewFromFile(file) {
-    if (!file) { clearUI(); return; }
-    const allowed = ['image/jpeg','image/png','image/webp'];
-    if (!allowed.includes(file.type)) {
-      setStatus('error', 'Formato non supportato. Usa JPG/PNG/WebP.');
-      clearUI(); return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setStatus('error', 'File troppo grande (>10MB).'); clearUI(); return;
-    }
-    const r = new FileReader();
-    r.onload = e => { preview.src = e.target.result; show(preview); };
-    r.readAsDataURL(file);
-    setStatus('ok', 'Immagine pronta. Premi “Predici”.');
-    show(btnPredict); show(btnClear); enable(btnPredict);
-  }
-
-  // ========= INPUT =========
-  fileInput.addEventListener('change', e => setPreviewFromFile(e.target.files[0]));
-
-  ['dragenter','dragover'].forEach(ev => {
-    dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('border-emerald-600'); });
-  });
-  ['dragleave','drop'].forEach(ev => {
-    dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('border-emerald-600'); });
-  });
-  dz.addEventListener('drop', e => {
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) { setPreviewFromFile(f); fileInput.files = e.dataTransfer.files; }
-  });
-  dz.addEventListener('click', () => fileInput.click());
-  btnClear.addEventListener('click', clearUI);
-
-  // ========= PREDICT =========
-  btnPredict.addEventListener('click', async () => {
-    if (!fileInput.files.length) return;
-    disable(btnPredict); disable(btnIncorrect); disable(btnCorrect);
-    show(busy); msg.textContent = '';
-
-    const fd = new FormData(); fd.append('file', fileInput.files[0]);
-    try {
-      const res = await fetch('{{ url_for("predict") }}', {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrfToken.value },
-        body: fd
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Errore sconosciuto');
-
-      predCls.textContent  = data.class;
-      predConf.textContent = data.confidence;
-      predId.value         = data.prediction_id;
-      msg.textContent      = 'Conferma o invia la correzione.';
-      hide(corrRow); show(btnStartCorr); // reset stato correzione
-      show(box);
-    } catch (err) {
-      msg.textContent = 'Errore: ' + err.message; show(box);
-    } finally {
-      hide(busy);
-      enable(btnIncorrect); enable(btnCorrect); enable(btnPredict);
-    }
-  });
-
-  // ========= FEEDBACK =========
-  btnCorrect.addEventListener('click', async () => {
-    const id = predId.value; if (!id) return;
-    disable(btnCorrect); disable(btnIncorrect);
-    try {
-      const r = await fetch('{{ url_for("submit_feedback") }}', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify({ prediction_id: id, feedback_type: 'correct' })
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Errore');
-      msg.textContent = 'Grazie! Feedback registrato.'; setTimeout(clearUI, 800);
-    } catch (e) {
-      msg.textContent = 'Errore feedback: ' + e.message;
-    } finally { enable(btnCorrect); enable(btnIncorrect); }
-  });
-
-  btnStartCorr.addEventListener('click', () => {
-    hide(btnStartCorr); show(corrRow);
-  });
-
-  btnCancelCorr.addEventListener('click', () => {
-    hide(corrRow); show(btnStartCorr);
-  });
-
-  btnIncorrect.addEventListener('click', async () => {
-    const id = predId.value; if (!id) return;
-    const cls = correctSel.value;
-    disable(btnCorrect); disable(btnIncorrect);
-    try {
-      const r = await fetch('{{ url_for("submit_feedback") }}', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify({
-          prediction_id: id,
-          feedback_type: 'incorrect',
-          correct_class: cls
-        })
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Errore');
-      msg.textContent = 'Correzione salvata. Grazie!'; setTimeout(clearUI, 800);
-    } catch (e) {
-      msg.textContent = 'Errore feedback: ' + e.message;
-    } finally { enable(btnCorrect); enable(btnIncorrect); }
-  });
-
-  // ========= PRELOAD =========
-  const preload = document.getElementById('server-preload');
-  if (preload) {
-    try {
-      if (preload.dataset.img) { preview.src = preload.dataset.img; show(preview); }
-      predCls.textContent  = preload.dataset.cls || '';
-      predConf.textContent = preload.dataset.conf || '';
-      predId.value         = preload.dataset.id || '';
-      msg.textContent      = 'Predizione in attesa di conferma.'; show(box);
-      show(btnClear);
-      hide(corrRow); show(btnStartCorr);
-    } catch (_) {}
-  }
+<!-- Dati per lo script -->
+<script type="application/json" id="page-data">
+{
+  "csrf": "{{ csrf_token() }}",
+  "preload": {{ preload|tojson|safe if preload else 'null' }}
+}
 </script>
+<script src="{{ url_for('static', filename='js/index.js') }}" defer></script>
 {% endblock %}
