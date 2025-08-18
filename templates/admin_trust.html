@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Fiducia utenti • Smart Waste{% endblock %}
+{% block content %}
+
+<h1 class="text-2xl font-semibold mb-6">Fiducia utenti (solo admin)</h1>
+
+<div class="bg-gray-900/60 border border-gray-800 rounded-xl p-4 mb-4">
+  <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+    <p class="text-sm text-gray-300">
+      Punteggio calcolato con Wilson-LB (corrette), tasso di verifica e consenso.
+      <span class="text-gray-400">Usalo come filtro qualitativo in export.</span>
+    </p>
+    <div class="flex items-center gap-2">
+      <a href="{{ url_for('admin_trust_json') }}"
+         class="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-sm">
+        Scarica JSON
+      </a>
+      <a href="{{ url_for('export_page') }}"
+         class="px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-sm">
+        Vai a export
+      </a>
+    </div>
+  </div>
+</div>
+
+<div class="bg-gray-900/60 border border-gray-800 rounded-xl overflow-hidden">
+  <div class="p-3 border-b border-gray-800">
+    <input id="q" placeholder="Cerca per username o email..."
+           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-800/70 text-gray-300">
+        <tr>
+          <th class="text-left px-3 py-2">Utente</th>
+          <th class="text-left px-3 py-2">Email</th>
+          <th class="text-right px-3 py-2">Totali</th>
+          <th class="text-right px-3 py-2">Verificati</th>
+          <th class="text-right px-3 py-2">Correct (LB%)</th>
+          <th class="text-right px-3 py-2">Consenso%</th>
+          <th class="text-right px-3 py-2">Trust</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        {% for r in rows %}
+        {% set verified = r.n_correct + r.n_incorrect %}
+        <tr class="border-t border-gray-800 hover:bg-gray-900/50">
+          <td class="px-3 py-2">{{ r.username }}</td>
+          <td class="px-3 py-2 text-gray-300">{{ r.email or '—' }}</td>
+          <td class="px-3 py-2 text-right">{{ r.total }}</td>
+          <td class="px-3 py-2 text-right">{{ verified }}</td>
+          <td class="px-3 py-2 text-right">
+            {% if verified %}{{ ('%0.1f' % (100*r.correct_rate_lb)) }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right">
+            {% if r.total %}{{ ('%0.1f' % (100*r.consent_rate)) }}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2">
+            <div class="flex items-center gap-2">
+              <div class="w-28 h-2 bg-gray-800 rounded overflow-hidden">
+                <!-- niente espressioni Jinja in CSS: usiamo data-w e lo settiamo da JS -->
+                <div class="h-2 bg-emerald-600 rounded trust-bar" data-w="{{ r.trust }}" style="width:0%"></div>
+              </div>
+              <span class="w-10 text-right" aria-label="Trust percentuale">{{ r.trust }}</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  // Ricerca client-side
+  const q = document.getElementById('q');
+  const rows = Array.from(document.querySelectorAll('#rows tr'));
+  q.addEventListener('input', () => {
+    const term = q.value.trim().toLowerCase();
+    rows.forEach(tr => {
+      const txt = tr.textContent.toLowerCase();
+      tr.style.display = term && !txt.includes(term) ? 'none' : '';
+    });
+  });
+
+  // Imposta larghezza barre fiducia senza mettere Jinja dentro CSS
+  document.querySelectorAll('.trust-bar').forEach(el => {
+    const val = parseInt(el.dataset.w || '0', 10);
+    const w = Math.max(0, Math.min(100, val)) + '%';
+    el.style.width = w;
+  });
+</script>
+
+{% endblock %}

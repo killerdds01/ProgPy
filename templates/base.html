@@ -5,10 +5,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>{% block title %}Smart Waste{% endblock %}</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col bg-grid">
+
 <header class="bg-gray-900/80 border-b border-gray-800">
   <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
     <a href="{{ url_for('landing') }}" class="flex items-center gap-2">
@@ -20,6 +22,9 @@
         <a href="{{ url_for('app') }}" class="hover:text-emerald-300">Classifica</a>
         <a href="{{ url_for('dashboard') }}" class="hover:text-emerald-300">Dashboard</a>
         <a href="{{ url_for('profile') }}" class="hover:text-emerald-300">Profilo</a>
+        {% if is_admin %}
+          <a href="{{ url_for('admin_trust') }}" class="hover:text-white text-gray-300">Admin</a>
+        {% endif %}
         <a href="{{ url_for('logout') }}" class="hover:text-rose-300">Logout</a>
       {% else %}
         <a href="{{ url_for('login') }}" class="hover:text-emerald-300">Accedi</a>

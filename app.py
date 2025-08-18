@@ -1,14 +1,43 @@
-# === Smart Waste · Flask App (FINAL + User Trust) =============================
+# === Smart Waste · Flask App (FINAL) ==========================================
 # Requisiti: Flask, Flask-Login, Flask-WTF, flask-cors, python-dotenv,
 #            pymongo, pillow, torch, torchvision, email-validator
 # Opzionale: Flask-Limiter (se assente, i limit diventano no-op)
-# =============================================================================
+# ==============================================================================
+#
+# COME SI USA (sviluppo):
+#   1) Crea e attiva un virtualenv e installa i requirement (requirements.txt).
+#   2) Assicurati che MongoDB sia raggiungibile. In locale puoi:
+#        - farlo partire tu (mongod), oppure
+#        - impostare MONGO_AUTOSTART=true e (opzionale) MONGO_BIN per l'auto-avvio.
+#   3) Avvia:     python app.py
+#   4) Il terminale stamperà gli URL per collegarti da:
+#        - PC:  http://127.0.0.1:5000/app
+#        - LAN: http://<IP_DEL_PC>:5000/app  (telefono/altro PC sulla stessa Wi-Fi)
+#
+# VARIABILI UTILI (.env facoltativo):
+#   SECRET_KEY=qualcosa-di-segreto
+#   FLASK_RUN_HOST=0.0.0.0         # ascolta su tutta la LAN (default di questo file)
+#   FLASK_RUN_PORT=5000
+#   MONGO_URL=mongodb://127.0.0.1:27017/
+#   MONGO_AUTOSTART=false|true     # true = prova ad avviare mongod in dev
+#   MONGO_BIN=percorso\mongod.exe  # se vuoi forzare il binario
+#   MODEL_PATH=best_model_finetuned_light.pth
+#   PASSWORD_PEPPER=pepper-per-hash-password
+#   USER_HASH_PEPPER=pepper-per-hash-user (export admin)
+#
+# SICUREZZA (sviluppo vs produzione):
+#   - Questo è il server di sviluppo di Flask (comodo per test, NON usare in produzione).
+#   - In produzione usa un WSGI (gunicorn/uwsgi) dietro un reverse proxy HTTPS,
+#     e imposta i cookie 'SECURE' a True.
+# ==============================================================================
 
-import os, io, csv, hmac, json, uuid, time, shutil, zipfile, datetime, tempfile, subprocess, hashlib
+# --- Stdlib -------------------------------------------------------------------
+import os, io, csv, hmac, json, uuid, time, shutil, zipfile, datetime, tempfile, subprocess, hashlib, math, socket
 from pathlib import Path
 from typing import Optional
 from datetime import timedelta
 
+# --- Flask & estensioni -------------------------------------------------------
 from flask import (
     Flask, request, jsonify, render_template, redirect, url_for,
     flash, session, send_from_directory, abort, send_file
@@ -26,6 +55,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 # ---- Rate-limit opzionale ----------------------------------------------------
+# Se Flask-Limiter non è installato, creiamo un "finto" decoratore .limit()
+# in modo che il codice giri ugualmente (no-op).
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
@@ -41,9 +72,18 @@ except Exception:
     def get_remote_address(): return None  # type: ignore
 
 # --- PyTorch ------------------------------------------------------------------
+# Carichiamo un modello ResNet18 già "finetunato" per 5 classi di rifiuti.
 import torch, torch.nn as nn
 from torchvision import models, transforms
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError, ImageOps  # ImageOps per exif_transpose
+
+# (Opzionale) Supporto HEIC/HEIF se pillow-heif è installato (foto iPhone, ecc.)
+try:
+    import pillow_heif  # pip install pillow-heif
+    pillow_heif.register_heif_opener()
+    _HAS_HEIF = True
+except Exception:
+    _HAS_HEIF = False
 
 # --- MongoDB ------------------------------------------------------------------
 from pymongo import MongoClient
@@ -53,8 +93,8 @@ from bson.objectid import ObjectId
 from dotenv import load_dotenv
 load_dotenv()
 
-# === Flask base ================================================================
-# NB: abbiamo cartella 'static/static' su disco ma la esponiamo come '/static'
+# === Flask base ===============================================================
+# static_folder: puntiamo a ./static/static così i template possono usare /static/...
 app = Flask(
     __name__,
     static_folder=os.path.join('static', 'static'),
@@ -62,8 +102,11 @@ app = Flask(
     template_folder='templates'
 )
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'DEV_KEY_CHANGE_ME')
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB
 
+# Limite upload 10MB (Flask risponde 413 automaticamente se superi)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+
+# Cookie & sessione (in produzione imposta i flag SECURE=True dietro HTTPS!)
 app.config.update(
     REMEMBER_COOKIE_DURATION=timedelta(days=14),
     PERMANENT_SESSION_LIFETIME=timedelta(minutes=45),
@@ -74,28 +117,41 @@ app.config.update(
     REMEMBER_COOKIE_SECURE=False,  # True in produzione (HTTPS)
 )
 
-# Limiter (no-op se il pacchetto non è installato)
+# Limiter (se il pacchetto non c'è, è un no-op)
 limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["200/hour"])
 
+# Cartelle di storage (create se non esistono)
 UPLOAD_FOLDER  = 'uploaded_images'
 PROFILE_FOLDER = 'profile_photos'
 Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 Path(PROFILE_FOLDER).mkdir(parents=True, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['UPLOAD_FOLDER']  = UPLOAD_FOLDER
 app.config['PROFILE_FOLDER'] = PROFILE_FOLDER
 
+# Tipi MIME supportati per le immagini e mappatura estensione file
 ALLOWED_MIME = {'image/jpeg', 'image/png', 'image/webp'}
 MIME_TO_EXT  = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}
 
+# Se supporto HEIC attivo, aggiungiamo i MIME e salviamo come .jpg
+if _HAS_HEIF:
+    ALLOWED_MIME = set(ALLOWED_MIME) | {'image/heic', 'image/heif'}
+    MIME_TO_EXT.update({'image/heic': '.jpg', 'image/heif': '.jpg'})
+
+# Scartiamo immagini troppo piccole (anti-micro-immagini)
+MIN_IMG_W = 96
+MIN_IMG_H = 96
+
+# CORS & CSRF (classiche protezioni per form e fetch)
 CORS(app)
 csrf = CSRFProtect(app)
 
-# === Login manager =============================================================
+# === Login manager ============================================================
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # === MongoDB (autostart dev) ==================================================
+# Se MONGO_AUTOSTART=true prova ad avviare mongod localmente in dev.
 MONGO_URL    = os.environ.get('MONGO_URL', 'mongodb://127.0.0.1:27017/')
 MONGO_PORT   = int(os.environ.get('MONGO_PORT', '27017') or 27017)
 MONGO_AUTO   = (os.environ.get('MONGO_AUTOSTART', 'false').lower() == 'true')
@@ -105,6 +161,7 @@ MONGO_DBPATH = os.environ.get('MONGO_DBPATH', './mongo_data')
 client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000)
 
 def _mongo_up() -> bool:
+    """True se MongoDB risponde al ping, altrimenti False."""
     try:
         client.admin.command('ping')
         return True
@@ -112,8 +169,12 @@ def _mongo_up() -> bool:
         print(f"[WARN] MongoDB non raggiungibile: {e}")
         return False
 
-def _try_start_mongo():
-    """Avvia mongod localmente se abilitato (solo dev)."""
+def _try_start_mongo() -> bool:
+    """
+    Avvia mongod localmente (solo dev) se abilitato via env e non è up.
+
+    Nota: funziona se hai mongod installato e accessibile. In alternativa specifica MONGO_BIN.
+    """
     if not MONGO_AUTO or _mongo_up():
         return _mongo_up()
     mongod = MONGO_BIN or shutil.which("mongod")
@@ -123,8 +184,8 @@ def _try_start_mongo():
     Path(MONGO_DBPATH).mkdir(parents=True, exist_ok=True)
     args = [mongod, "--dbpath", str(MONGO_DBPATH), "--port", str(MONGO_PORT), "--bind_ip", "127.0.0.1", "--quiet"]
     flags = 0
-    if os.name == "nt":
-        flags = 0x00000200 | 0x00000008  # NEW_PROCESS_GROUP | DETACHED
+    if os.name == "nt":  # DETACHED + NEW_PROCESS_GROUP su Windows
+        flags = 0x00000200 | 0x00000008
     try:
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
         time.sleep(2.0)
@@ -141,19 +202,24 @@ predictions_collection = db.predictions if DB_READY else None
 users_collection       = db.users if DB_READY else None
 
 # === Modello ==================================================================
+# Classi previste dal modello (in ordine stabile)
 CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
+
+# Usiamo CPU per semplicità/portabilità
 device = torch.device("cpu")
 MODEL_PATH = os.environ.get('MODEL_PATH', 'best_model_finetuned_light.pth')
 
+# ResNet18 con testa a N classi (carichiamo solo i pesi, non le weight predefinite)
 model = models.resnet18(weights=None)
 model.fc = nn.Linear(model.fc.in_features, len(CLASS_NAMES))
 try:
-    state = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+    state = torch.load(MODEL_PATH, map_location=device, weights_only=True)  # PyTorch >= 2.0
 except TypeError:
-    state = torch.load(MODEL_PATH, map_location=device)
-model.load_state_dict(state); model.to(device).eval()
+    state = torch.load(MODEL_PATH, map_location=device)                     # fallback PyTorch < 2.0
+model.load_state_dict(state)
+model.to(device).eval()
 
-# Temperature scaling (opzionale)
+# Temperature scaling (affina le probabilità senza ri-addestrare)
 TEMPERATURE = 1.0
 try:
     with open('calibration.json','r',encoding='utf-8') as f:
@@ -162,6 +228,7 @@ try:
 except Exception:
     print("[CALIB] T=1.0")
 
+# Trasformazioni immagine (devono essere le stesse usate in training/validazione)
 transform = transforms.Compose([
     transforms.Resize((256)),
     transforms.CenterCrop(224),
@@ -170,6 +237,7 @@ transform = transforms.Compose([
 ])
 
 # === Forms ====================================================================
+# Nota: Flask-WTF gestisce CSRF e validazioni per i form HTML.
 class RegistrationForm(FlaskForm):
     username   = StringField('Username (opzionale)')
     first_name = StringField('Nome',     validators=[DataRequired(), Length(min=1, max=60)])
@@ -193,11 +261,11 @@ class UploadForm(FlaskForm):
 
 # === Helpers ==================================================================
 def _peppered(pw: str) -> str:
-    """Applica un 'pepper' lato server alla password prima di hasharla/verificarla."""
+    """Aggiunge un 'pepper' (dal .env) alla password prima dell'hash per più sicurezza."""
     return f"{os.environ.get('PASSWORD_PEPPER','')}{pw}"
 
 class User(UserMixin):
-    """Wrapper user per Flask-Login (lettura da Mongo)."""
+    """Wrapper per Flask-Login: trasforma il documento Mongo in un oggetto 'User'."""
     def __init__(self, d):
         self.id = str(d['_id'])
         self.username = d.get('username') or d.get('email')
@@ -207,56 +275,15 @@ class User(UserMixin):
         self.role = d.get('role','user')
         self.consent_training_default = bool(d.get('consent_training_default', False))
         self.profile_image = d.get('profile_image')
-        self.trust = float(d.get('trust', 0.5))  # opzionale: utile da mostrare
 
 @login_manager.user_loader
 def load_user(user_id):
-    if not DB_READY:
-        return None
+    """Carica l'utente per la sessione (dato l'id in sessione)."""
+    if not DB_READY: return None
     doc = users_collection.find_one({"_id": ObjectId(user_id)})
     return User(doc) if doc else None
 
-# --- Trust system --------------------------------------------------------------
-# Modello: Beta(a,b) con priori a=2,b=2 ⇒ trust iniziale = 0.5
-# - feedback 'correct'    -> a += 1.0
-# - feedback 'incorrect'  -> a += 0.25 (premio la correzione), b += 0.75
-# Trust = a / (a + b)
-def update_user_trust(user_id: str, feedback: str, has_correction: bool = False) -> float:
-    try:
-        u = users_collection.find_one({'_id': ObjectId(user_id)})
-    except Exception:
-        u = None
-    if not u:
-        return 0.5
-
-    stats = u.get('trust_stats') or {'a': 2.0, 'b': 2.0}
-    a = float(stats.get('a', 2.0))
-    b = float(stats.get('b', 2.0))
-
-    if feedback == 'correct':
-        a += 1.0
-    elif feedback == 'incorrect':
-        a += 0.25 if has_correction else 0.0
-        b += 0.75
-
-    trust = a / (a + b)
-    users_collection.update_one(
-        {'_id': ObjectId(user_id)},
-        {'$set': {'trust': trust, 'trust_stats': {'a': a, 'b': b}}}
-    )
-    return trust
-
-# Migrazione soft per utenti esistenti (se manca trust/trust_stats)
-if DB_READY:
-    try:
-        users_collection.update_many(
-            {'trust': {'$exists': False}},
-            {'$set': {'trust': 0.5, 'trust_stats': {'a': 2.0, 'b': 2.0}}}
-        )
-    except Exception:
-        pass
-
-# === Admin bootstrap (opzionale) ==============================================
+# Bootstrap admin opzionale all'avvio (solo se ADMIN_USERNAME è presente)
 admin_username = os.environ.get('ADMIN_USERNAME')
 admin_password = os.environ.get('ADMIN_PASSWORD')
 if admin_username and DB_READY:
@@ -272,20 +299,18 @@ if admin_username and DB_READY:
                 'username': admin_username, 'email': None,
                 'first_name':'Admin','last_name':'',
                 'password': generate_password_hash(_peppered(pwd)),
-                'role':'admin','consent_training_default':False,'profile_image':None,
-                'trust': 0.5, 'trust_stats': {'a': 2.0, 'b': 2.0}
+                'role':'admin','consent_training_default':False,'profile_image':None
             })
             print(f"[BOOT] Creato admin: {admin_username}")
     except Exception as e:
         print(f"[WARN] Bootstrap admin saltato: {e}")
 
-# --- Label & copy helpers ------------------------------------------------------
 def compute_label_and_weight(doc):
     """
-    Stabilisce label_final, source e base weight (senza fiducia).
-    - feedback == 'correct'                -> predetta,        'user_verified', 1.0
-    - feedback == 'incorrect' + correzione -> correzione,      'user_corrected', 0.9
-    - altrimenti (non verificata)          -> predetta,        'unverified',    0.3
+    Stabilisce l'etichetta finale e un peso per il training export:
+      - feedback == 'correct'                -> (predetta, 'user_verified',   1.0)
+      - feedback == 'incorrect' + correzione -> (correzione, 'user_corrected',0.9)
+      - altrimenti (non verificata)          -> (predetta, 'unverified',      0.3)
     """
     pred = doc.get('class','')
     fb   = (doc.get('feedback') or '').strip().lower()
@@ -296,61 +321,97 @@ def compute_label_and_weight(doc):
     return '','unverified',0.3
 
 def materialize_image_local(doc, root: Path) -> Optional[Path]:
-    """Copia l'immagine su una cartella temporanea per lo ZIP di export."""
+    """
+    Copia il file immagine di una predizione in una cartella temporanea (per export).
+    Ritorna il percorso di destinazione se esiste, altrimenti None.
+    """
     fname = doc.get('image_filename')
-    if not fname:
-        return None
+    if not fname: return None
     src = Path(app.config['UPLOAD_FOLDER'])/fname
-    if not src.exists():
-        return None
+    if not src.exists(): return None
     dst = root/fname
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src,dst)
     return dst
 
+# === Fiducia utente (Admin) ===================================================
+def wilson_lower_bound(successes: int, total: int, z: float = 1.96) -> float:
+    """Lower bound dell'intervallo di Wilson per proporzioni (stima prudente)."""
+    if total <= 0:
+        return 0.0
+    phat = successes / total
+    denom = 1 + z*z/total
+    centre = phat + (z*z)/(2*total)
+    margin = z * math.sqrt((phat*(1-phat) + (z*z)/(4*total)) / total)
+    return max(0.0, (centre - margin) / denom)
+
+def compute_user_trust(user_id: str) -> int:
+    """
+    Calcola un punteggio di fiducia 0–100:
+      - accuratezza verificata (Wilson LB)
+      - quanto spesso verifica (verify_rate)
+      - quanto spesso consente l'uso per training (consent_rate)
+    """
+    total = predictions_collection.count_documents({'user_id': user_id})
+    if total == 0:
+        return 0
+    n_correct   = predictions_collection.count_documents({'user_id': user_id, 'feedback':'correct'})
+    n_incorrect = predictions_collection.count_documents({'user_id': user_id, 'feedback':'incorrect'})
+    verified = n_correct + n_incorrect
+    correct_lb = wilson_lower_bound(n_correct, verified) if verified else 0.0
+    verify_rate = verified / total
+    consent_rate = predictions_collection.count_documents({'user_id': user_id, 'consent_training': True}) / total
+    trust = (0.65 * correct_lb + 0.20 * verify_rate + 0.15 * consent_rate) * 100.0
+    return int(round(max(0.0, min(100.0, trust))))
+
 # === Middleware & headers =====================================================
 @app.before_request
 def idle_logout():
-    """Logout automatico per inattività."""
-    if not current_user.is_authenticated:
-        return
+    """
+    Se l'utente è inattivo oltre PERMANENT_SESSION_LIFETIME, si forza il logout.
+    Evita che sessioni lasciate aperte restino attive per sempre.
+    """
+    if not current_user.is_authenticated: return
     now = datetime.datetime.utcnow().timestamp()
     last = session.get('last_seen', now)
     if now - last > app.config['PERMANENT_SESSION_LIFETIME'].total_seconds():
-        logout_user()
-        session.clear()
-        flash('Sessione scaduta per inattività. Accedi di nuovo.','info')
+        logout_user(); session.clear()
+        flash('Sessione scaduta per inattività. Accedi di nuovo.', 'info')
         return redirect(url_for('login'))
     session['last_seen'] = now
 
 @app.before_request
 def require_db_if_needed():
-    """Consenti solo alcune pagine se il DB non è pronto."""
-    if DB_READY:
-        return
+    """
+    Blocca l'accesso alle pagine che richiedono DB quando il DB non è pronto.
+    Le uniche pagine accessibili in tal caso sono landing/login/register/static.
+    """
+    if DB_READY: return
     if (request.endpoint or '') not in {'landing','login','register','static'}:
         return render_template("error.html", code=503, message="Database offline. Avvia MongoDB e ricarica."), 503
 
 @app.before_request
 def force_feedback_before_navigation():
     """
-    Blocca la navigazione se c'è una predizione pendente non confermata,
-    tranne per questi endpoint ammessi (upload, feedback, ecc.).
+    Se esiste una predizione 'pending' in sessione, costringe a dare feedback
+    prima di girare il resto dell'app. Evita code di predizioni mai confermate.
     """
-    if not current_user.is_authenticated:
-        return
-    if not session.get('pending_prediction_id'):
-        return
+    if not current_user.is_authenticated: return
+    if not session.get('pending_prediction_id'): return
     allowed={'app','predict','submit_feedback','uploaded_file','login','register','logout','static',
              'dashboard','profile','profile_photo_upload','profile_photo_get','delete_prediction',
-             'account_delete','profile_password','account_export','export_page','do_export'}
+             'account_delete','profile_password','account_export','export_page','do_export',
+             'admin_trust','admin_trust_json'}
     if request.method=='GET' and (request.endpoint or '') not in allowed:
-        flash('Conferma prima la predizione in corso per proseguire.','error')
+        flash('Conferma prima la predizione in corso per proseguire.', 'error')
         return redirect(url_for('app'))
 
 @app.after_request
 def set_security_headers(resp):
-    """Header di sicurezza minimi (CSP, Referrer, ecc.)."""
+    """
+    Applica una Content-Security-Policy di base e altri header di sicurezza.
+    In produzione puoi irrigidire ulteriormente la CSP.
+    """
     csp=("default-src 'self'; img-src 'self' data: blob:; "
          "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
          "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
@@ -363,7 +424,7 @@ def set_security_headers(resp):
 
 @app.context_processor
 def inject_now():
-    """Variabili globali per i template."""
+    """Rende disponibili nei template: ora corrente, flag admin, helper CSRF."""
     return {'now': datetime.datetime.now,
             'is_admin': (getattr(current_user,'role','user')=='admin') if current_user.is_authenticated else False,
             'csrf_token': generate_csrf}
@@ -388,9 +449,13 @@ def err_500(e): return render_template("error.html", code=500, message="Errore i
 @app.errorhandler(503)
 def err_503(e): return render_template("error.html", code=503, message="Servizio non disponibile"), 503
 
-# === Routes ===================================================================
+# === Routes: Landing & App ====================================================
 @app.route('/')
 def landing():
+    """
+    Pagina di benvenuto. Se l'utente è loggato, mostra quante predizioni pendenti
+    (senza feedback) ha nel badge.
+    """
     pending = 0
     if current_user.is_authenticated and not session.get('pending_prediction_id') and DB_READY:
         pending = predictions_collection.count_documents({'user_id': current_user.id, 'feedback': None})
@@ -399,6 +464,11 @@ def landing():
 @app.route('/app', endpoint='app')
 @login_required
 def classify():
+    """
+    Pagina principale di classificazione:
+      - upload di un'immagine
+      - mostra ultima predizione 'pending' (se esiste) da confermare/correggere
+    """
     form = UploadForm()
     preload=None
     if DB_READY:
@@ -410,21 +480,20 @@ def classify():
     return render_template('index.html', form=form, class_names=CLASS_NAMES, preload=preload,
                            user_default_consent=bool(getattr(current_user,'consent_training_default',False)))
 
-# ---- Auth --------------------------------------------------------------------
+# === Auth =====================================================================
 @app.route('/register', methods=['GET','POST'])
 @limiter.limit("10/minute")
 def register():
+    """Registrazione utente con validazioni basilari e hash + pepper sulla password."""
     form = RegistrationForm()
-    if current_user.is_authenticated:
-        return redirect(url_for('app'))
+    if current_user.is_authenticated: return redirect(url_for('app'))
     if request.method=='POST' and form.validate_on_submit():
         if not DB_READY:
-            flash('Database offline: impossibile registrare ora.','error')
+            flash('Database offline: impossibile registrare ora.', 'error')
             return render_template('register.html', form=form)
-        email=form.email.data.strip().lower()
-        username=(form.username.data or '').strip()
+        email=form.email.data.strip().lower(); username=(form.username.data or '').strip()
         if users_collection.find_one({'email': email}):
-            flash('Email già registrata.','error')
+            flash('Email già registrata.', 'error')
             return render_template('register.html', form=form)
         users_collection.insert_one({
             'username': username or email.split('@')[0],
@@ -432,53 +501,52 @@ def register():
             'last_name' : form.last_name.data.strip(),
             'email': email,
             'password': generate_password_hash(_peppered(form.password.data)),
-            'role':'user',
-            'created_at': datetime.datetime.utcnow(),
+            'role':'user','created_at': datetime.datetime.utcnow(),
             'consent_training_default': bool(form.consent_training_default.data),
-            'profile_image': None,
-            # trust defaults
-            'trust': 0.5,
-            'trust_stats': {'a': 2.0, 'b': 2.0},
+            'profile_image': None
         })
-        flash('Registrazione completata! Ora accedi.','success')
+        flash('Registrazione completata! Ora accedi.', 'success')
         return redirect(url_for('login'))
     return render_template('register.html', form=form)
 
 @app.route('/login', methods=['GET','POST'])
 @limiter.limit("10/minute")
 def login():
+    """Login con email/username + password. Imposta sessione 'permanent'."""
     form = LoginForm()
-    if current_user.is_authenticated:
-        return redirect(url_for('app'))
+    if current_user.is_authenticated: return redirect(url_for('app'))
     if request.method=='POST' and form.validate_on_submit():
         if not DB_READY:
-            flash('Database offline: impossibile accedere ora.','error')
+            flash('Database offline: impossibile accedere ora.', 'error')
             return render_template('login.html', form=form)
         key=form.username.data.strip()
         q={'$or':[{'email':key.lower()},{'username':key}]}
         u=users_collection.find_one(q)
         if u and check_password_hash(u['password'], _peppered(form.password.data)):
-            login_user(User(u), remember=form.remember.data)
-            session.permanent=True
+            login_user(User(u), remember=form.remember.data); session.permanent=True
             session['last_seen']=datetime.datetime.utcnow().timestamp()
-            flash('Login effettuato!','success')
+            flash('Login effettuato!', 'success')
             return redirect(url_for('app'))
-        flash('Credenziali errate.','error')
+        flash('Credenziali errate.', 'error')
     return render_template('login.html', form=form)
 
 @app.route('/logout')
 def logout():
-    logout_user()
-    session.clear()
-    flash('Logout effettuato.','info')
+    """Logout, pulizia sessione e redirect alla landing."""
+    logout_user(); session.clear(); flash('Logout effettuato.', 'info')
     return redirect(url_for('landing'))
 
-# ---- Dashboard + filtri ------------------------------------------------------
+# === Dashboard + filtri =======================================================
 @app.route('/dashboard')
 @login_required
 def dashboard():
+    """
+    Storico predizioni dell'utente con filtri per classe/stato/intervalli data.
+    Puoi mettere mano qui se vuoi cambiare l'ordinamento o aggiungere filtri.
+    """
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
+
     f_class=(request.args.get('class') or '').strip()
     f_state=(request.args.get('state') or 'all').strip()
     f_from =(request.args.get('from') or '').strip()
@@ -508,10 +576,11 @@ def dashboard():
                            f_class=f_class, f_state=f_state, f_from=f_from, f_to=f_to,
                            no_images=no_images)
 
-# ---- Profilo -----------------------------------------------------------------
+# === Profilo ==================================================================
 @app.route('/profile', methods=['GET','POST'])
 @login_required
 def profile():
+    """Pagina profilo: nome/cognome, consenso di default, ecc."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
     if request.method=='POST':
@@ -520,7 +589,7 @@ def profile():
         cons = True if request.form.get('consent_training_default') in ('on','true','1') else False
         users_collection.update_one({'_id': ObjectId(current_user.id)},
                                     {'$set': {'first_name':first,'last_name':last,'consent_training_default':cons}})
-        flash('Profilo aggiornato.','success')
+        flash('Profilo aggiornato.', 'success')
         return redirect(url_for('profile'))
     usr=users_collection.find_one({'_id': ObjectId(current_user.id)}) if DB_READY else {}
     return render_template('profile.html', user=usr)
@@ -529,70 +598,77 @@ def profile():
 @login_required
 @limiter.limit("20/minute")
 def profile_photo_upload():
+    """Upload foto profilo: ridimensiona e corregge l'orientamento da EXIF."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
     f = request.files.get('photo')
     if not f or f.filename=='':
-        flash('Nessun file selezionato.','error'); return redirect(url_for('profile'))
+        flash('Nessun file selezionato.', 'error')
+        return redirect(url_for('profile'))
     if f.mimetype not in ALLOWED_MIME:
-        flash('Formato non supportato (JPG/PNG/WebP).','error'); return redirect(url_for('profile'))
-    ext=MIME_TO_EXT.get(f.mimetype,'.jpg')
-    filename=f"profile_{current_user.id}{ext}"
+        flash('Formato non supportato (JPG/PNG/WebP).', 'error')
+        return redirect(url_for('profile'))
+    ext=MIME_TO_EXT.get(f.mimetype,'.jpg'); filename=f"profile_{current_user.id}{ext}"
     path=Path(app.config['PROFILE_FOLDER'])/filename
     try:
-        tmp=Path(tempfile.mkdtemp())/f"tmp{ext}"
-        f.save(tmp)
-        img=Image.open(tmp).convert('RGB')
+        tmp=Path(tempfile.mkdtemp())/f"tmp{ext}"; f.save(tmp)
+        img=Image.open(tmp)
+        try: img = ImageOps.exif_transpose(img)  # auto-rotate EXIF
+        except Exception: pass
+        img = img.convert('RGB')
         img.thumbnail((512,512))
         img.save(path,quality=88)
         tmp.unlink(missing_ok=True)
         users_collection.update_one({'_id': ObjectId(current_user.id)}, {'$set': {'profile_image': filename}})
-        flash('Foto profilo aggiornata.','success')
+        flash('Foto profilo aggiornata.', 'success')
     except Exception:
-        flash('Errore durante il salvataggio della foto.','error')
+        flash('Errore durante il salvataggio della foto.', 'error')
     return redirect(url_for('profile'))
 
 @app.route('/profile/photo/<filename>')
 @login_required
 def profile_photo_get(filename):
+    """Ritorna la foto profilo (solo proprietario o admin)."""
     is_owner = filename.startswith(f"profile_{current_user.id}")
-    if not is_owner and getattr(current_user,'role','user')!='admin':
-        abort(403)
+    if not is_owner and getattr(current_user,'role','user')!='admin': abort(403)
     return send_from_directory(app.config['PROFILE_FOLDER'], filename)
 
 @app.route('/profile/password', methods=['POST'])
 @login_required
 @limiter.limit("10/hour")
 def profile_password():
+    """Cambio password con verifica della vecchia e della conferma."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
     old=request.form.get('old_password') or ''
     new=request.form.get('new_password') or ''
     conf=request.form.get('confirm_password') or ''
     if len(new)<6 or new!=conf:
-        flash('La nuova password deve avere almeno 6 caratteri e coincidere con la conferma.','error')
+        flash('La nuova password deve avere almeno 6 caratteri e coincidere con la conferma.', 'error')
         return redirect(url_for('profile'))
     u=users_collection.find_one({'_id': ObjectId(current_user.id)})
     if not u or not check_password_hash(u['password'], _peppered(old)):
-        flash('Password attuale errata.','error')
+        flash('Password attuale errata.', 'error')
         return redirect(url_for('profile'))
     users_collection.update_one({'_id': ObjectId(current_user.id)},
                                 {'$set':{'password': generate_password_hash(_peppered(new))}})
-    flash('Password aggiornata correttamente.','success')
+    flash('Password aggiornata correttamente.', 'success')
     return redirect(url_for('profile'))
 
-# ---- Cancellazione account ---------------------------------------------------
+# === Cancellazione account ====================================================
 @app.route('/account/delete', methods=['POST'])
 @login_required
 @limiter.limit("5/hour")
 def account_delete():
+    """Elimina account e tutti i dati/immagini associati all'utente."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
     pwd=request.form.get('password') or ''
     u=users_collection.find_one({'_id': ObjectId(current_user.id)})
     if not u or not check_password_hash(u['password'], _peppered(pwd)):
-        flash('Password errata.','error'); return redirect(url_for('profile'))
-    # cancella immagini/predizioni
+        flash('Password errata.', 'error')
+        return redirect(url_for('profile'))
+    # elimina immagini/predizioni
     for p in predictions_collection.find({'user_id': current_user.id}):
         fn=p.get('image_filename')
         if fn:
@@ -601,7 +677,7 @@ def account_delete():
                 try: fp.unlink()
                 except Exception: pass
     predictions_collection.delete_many({'user_id': current_user.id})
-    # foto profilo
+    # elimina foto profilo
     if u.get('profile_image'):
         pp=Path(app.config['PROFILE_FOLDER'])/u['profile_image']
         if pp.exists():
@@ -609,14 +685,15 @@ def account_delete():
             except Exception: pass
     users_collection.delete_one({'_id': ObjectId(current_user.id)})
     logout_user(); session.clear()
-    flash('Account eliminato definitivamente.','success')
+    flash('Account eliminato definitivamente.', 'success')
     return redirect(url_for('landing'))
 
-# ---- Esportazione dati utente (JSON) ----------------------------------------
+# === Esportazione dati utente (JSON) =========================================
 @app.route('/account/export')
 @login_required
 @limiter.limit("10/hour")
 def account_export():
+    """Esporta in JSON le predizioni dell'utente (senza immagini)."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
     docs=list(predictions_collection.find({'user_id': current_user.id}).sort('timestamp',-1))
@@ -635,50 +712,99 @@ def account_export():
         })
     return jsonify({'count': len(out), 'predictions': out})
 
-# ---- Predict & Feedback ------------------------------------------------------
+# === Predict & Feedback (fetch-friendly: CSRF esenti) ========================
 @app.route('/predict', methods=['POST'])
 @login_required
-@csrf.exempt                  # esentato se chiami via fetch senza token CSRF
+@csrf.exempt
 @limiter.limit("60/minute")
 def predict():
+    """
+    Riceve un'immagine, effettua inferenza e salva la predizione come 'pending'.
+    Ritorna json: {class, confidence, prediction_id}
+    """
     if not DB_READY:
         return jsonify({'error':'Database offline.'}), 503
+
+    # Validazione presenza file
     if 'file' not in request.files or request.files['file'].filename=='':
         return jsonify({'error':'Nessun file inviato.'}), 400
-    f=request.files['file']
+
+    f = request.files['file']
     if f.mimetype not in ALLOWED_MIME:
-        return jsonify({'error':'Formato non supportato. Usa JPG/PNG/WebP.'}), 400
+        # 415 se HEIC senza supporto lato server
+        msg = 'Formato non supportato. Usa JPG/PNG/WebP.'
+        if ('heic' in (f.mimetype or '') or 'heif' in (f.mimetype or '')) and not _HAS_HEIF:
+            msg = 'Formato HEIC/HEIF non supportato su questo server.'
+        return jsonify({'error': msg}), 415
 
-    base=secure_filename(f.filename.rsplit('.',1)[0]) or 'img'
-    ext=MIME_TO_EXT.get(f.mimetype,'.jpg')
-    uniq=f"{uuid.uuid4()}_{base}{ext}"
-    path=Path(app.config['UPLOAD_FOLDER'])/uniq
+    # Costruisco nome file finale (univoco + estensione corretta)
+    base = secure_filename(f.filename.rsplit('.',1)[0]) or 'img'
+    ext  = MIME_TO_EXT.get(f.mimetype,'.jpg')
+    uniq = f"{uuid.uuid4()}_{base}{ext}"
+    final_path = Path(app.config['UPLOAD_FOLDER'])/uniq
+
     try:
-        f.save(path)
-        Image.open(path).verify()
-        img=Image.open(path).convert('RGB')
-    except (UnidentifiedImageError,OSError):
-        path.exists() and path.unlink()
-        return jsonify({'error':'File non valido o danneggiato.'}), 400
+        # Se HEIC/HEIF, decodifica e ricodifica in JPEG
+        if f.mimetype in {'image/heic','image/heif'}:
+            tmpdir = Path(tempfile.mkdtemp())
+            tmp_in = tmpdir / f"up{ext}"
+            f.save(tmp_in)
+            img = Image.open(tmp_in)
+            try: img = ImageOps.exif_transpose(img)
+            except Exception: pass
+            w, h = img.size
+            if w < MIN_IMG_W or h < MIN_IMG_H:
+                try: tmp_in.unlink(missing_ok=True); tmpdir.rmdir()
+                except Exception: pass
+                return jsonify({'error': f'Immagine troppo piccola (min {MIN_IMG_W}x{MIN_IMG_H}px).'}), 400
+            img.convert('RGB').save(final_path, quality=90)
+            try: tmp_in.unlink(missing_ok=True); tmpdir.rmdir()
+            except Exception: pass
+        else:
+            # JPEG/PNG/WebP: salvo, verifico integrità e correggo orientamento
+            f.save(final_path)
+            Image.open(final_path).verify()  # verifica che non sia corrotto
+            img = Image.open(final_path)
+            try: img = ImageOps.exif_transpose(img)
+            except Exception: pass
+            w, h = img.size
+            if w < MIN_IMG_W or h < MIN_IMG_H:
+                try: final_path.unlink()
+                except Exception: pass
+                return jsonify({'error': f'Immagine troppo piccola (min {MIN_IMG_W}x{MIN_IMG_H}px).'}), 400
 
-    # consenso per l'uso della singola immagine
+        # Conversione RGB per il modello (alcuni formati hanno alpha)
+        try: img = img.convert('RGB')
+        except Exception: pass
+
+    except (UnidentifiedImageError, OSError):
+        if final_path.exists():
+            try: final_path.unlink()
+            except Exception: pass
+        return jsonify({'error':'File non valido o danneggiato.'}), 400
+    except Exception as e:
+        if final_path.exists():
+            try: final_path.unlink()
+            except Exception: pass
+        return jsonify({'error': f'Errore in apertura immagine: {str(e)}'}), 400
+
+    # Consenso per singolo upload (se assente, usa il default dell'utente)
     flag=request.form.get('consent_training')
     per_upload_consent = (flag in ('on','true','1')) if flag is not None else bool(getattr(current_user,'consent_training_default',False))
 
-    # inferenza
+    # Inferenza PyTorch
     x=transform(img).unsqueeze(0).to(device)
     with torch.no_grad():
         out=model(x)
-        if TEMPERATURE!=1.0:
-            out=out/TEMPERATURE
+        if TEMPERATURE!=1.0: out=out/TEMPERATURE
         probs=torch.softmax(out[0],dim=0)
         p,idx=torch.max(probs,0)
         cls=CLASS_NAMES[idx.item()]
     prob=float(p.item())
 
-    # salvataggio predizione
+    # Salva doc nel DB e marca la predizione come "pending" nella sessione
     doc={'class':cls,'confidence':f"{prob*100:.2f}%",'prob':prob,'timestamp':datetime.datetime.utcnow(),
-         'image_filename':uniq,'user_id':current_user.id,'feedback':None,'correct_class_feedback':None,
+         'image_filename':final_path.name,'user_id':current_user.id,'feedback':None,'correct_class_feedback':None,
          'consent_training':per_upload_consent,'image_deleted':False}
     inserted_id=predictions_collection.insert_one(doc).inserted_id
     session['pending_prediction_id']=str(inserted_id)
@@ -686,30 +812,29 @@ def predict():
 
 @app.route('/feedback', methods=['POST'])
 @login_required
-@csrf.exempt                  # esentato se chiami via fetch senza token CSRF
+@csrf.exempt
 @limiter.limit("30/minute")
 def submit_feedback():
-    if not DB_READY:
-        return jsonify({'error':'Database offline.'}), 503
+    """
+    Salva il feedback sulla predizione:
+      - 'correct'
+      - 'incorrect' + 'correct_class' (una delle CLASS_NAMES)
+    Se non c'è consenso, elimina subito il file immagine dal disco.
+    """
+    if not DB_READY: return jsonify({'error':'Database offline.'}), 503
     data=request.get_json(silent=True) or {}
     pid=data.get('prediction_id'); ftype=data.get('feedback_type'); ccls=data.get('correct_class')
-    if not pid or not ftype:
-        return jsonify({'error':'Dati mancanti.'}), 400
+    if not pid or not ftype: return jsonify({'error':'Dati mancanti.'}), 400
 
     upd={'feedback': ftype,'feedback_timestamp': datetime.datetime.utcnow()}
     if ftype=='incorrect':
-        if ccls not in CLASS_NAMES:
-            return jsonify({'error':'Classe corretta non valida.'}), 400
+        if ccls not in CLASS_NAMES: return jsonify({'error':'Classe corretta non valida.'}), 400
         upd['correct_class_feedback']=ccls
 
     res=predictions_collection.update_one({'_id': ObjectId(pid), 'user_id': current_user.id},{'$set': upd})
-    if res.matched_count==0:
-        return jsonify({'error':'Predizione non trovata.'}), 404
+    if res.matched_count==0: return jsonify({'error':'Predizione non trovata.'}), 404
 
-    # Aggiorna fiducia utente in base al feedback
-    update_user_trust(current_user.id, ftype, bool(ccls))
-
-    # Se l'utente NON consente l'uso per training, rimuoviamo il file
+    # no-consent: rimuovi file per evitare uso non autorizzato
     doc=predictions_collection.find_one({'_id': ObjectId(pid), 'user_id': current_user.id})
     if doc and not doc.get('consent_training', False):
         fn=doc.get('image_filename')
@@ -718,32 +843,30 @@ def submit_feedback():
             if fp.exists():
                 try: fp.unlink()
                 except Exception: pass
-        predictions_collection.update_one({'_id': ObjectId(pid)},
-                                          {'$set':{'image_filename':None,'image_deleted':True}})
+        predictions_collection.update_one({'_id': ObjectId(pid)},{'$set':{'image_filename':None,'image_deleted':True}})
 
-    if session.get('pending_prediction_id')==pid:
-        session.pop('pending_prediction_id',None)
+    if session.get('pending_prediction_id')==pid: session.pop('pending_prediction_id',None)
     return jsonify({'message':'Feedback salvato.'}), 200
 
-# ---- Immagini protette / delete predizione -----------------------------------
+# === Immagini protette / delete predizione ====================================
 @app.route('/uploads/<filename>')
 @login_required
 def uploaded_file(filename):
+    """Serve immagini solo se appartengono all'utente corrente (autorizzazione)."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
     pred=predictions_collection.find_one({'image_filename': filename, 'user_id': current_user.id})
-    if not pred:
-        abort(403)
+    if not pred: abort(403)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route('/prediction/<pid>/delete', methods=['POST'])
 @login_required
 @limiter.limit("30/minute")
 def delete_prediction(pid):
+    """Elimina una predizione e l'eventuale file immagine dal disco."""
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
-    try:
-        oid=ObjectId(pid)
+    try: oid=ObjectId(pid)
     except Exception:
         return render_template("error.html", code=400, message="ID non valido"), 400
     doc=predictions_collection.find_one({'_id': oid, 'user_id': current_user.id})
@@ -756,48 +879,45 @@ def delete_prediction(pid):
             try: fp.unlink()
             except Exception: pass
     predictions_collection.delete_one({'_id': oid})
-    flash('Immagine e predizione eliminate.','success')
+    flash('Immagine e predizione eliminate.', 'success')
     return redirect(url_for('dashboard'))
 
-# ---- Export (admin) ----------------------------------------------------------
+# === Admin: Export dataset ====================================================
 @app.route('/export', methods=['GET'])
 @login_required
 def export_page():
-    if getattr(current_user,'role','user')!='admin':
-        abort(403)
+    """Pagina admin per configurare l'export del dataset."""
+    if getattr(current_user,'role','user')!='admin': abort(403)
     return render_template('export.html', class_names=CLASS_NAMES)
 
 @app.route('/export', methods=['POST'])
 @login_required
 def do_export():
-    if getattr(current_user,'role','user')!='admin':
-        abort(403)
+    """
+    Genera uno ZIP con:
+      - dataset.csv (righe = esempi, pesati per fiducia)
+      - cartella images/ con sottocartelle per classe
+    Filtri: conf minima, trust minima, date, consenso, ecc.
+    """
+    if getattr(current_user,'role','user')!='admin': abort(403)
 
     include_unverified = request.form.get('include_unverified')=='on'
     include_user_hash  = request.form.get('include_user_hash')=='on'
     scope_all          = request.form.get('scope')=='all'
     only_consented     = (request.form.get('only_consented','on')=='on')
 
-    # conf. minima (0..1)
-    try:
-        min_conf=float(request.form.get('min_conf','0') or 0)
-    except Exception:
-        min_conf=0.0
+    try: min_conf = float(request.form.get('min_conf','0') or 0)
+    except Exception: min_conf = 0.0
+    try: min_trust = int(float(request.form.get('min_trust','0') or 0))
+    except Exception: min_trust = 0
 
-    # fiducia minima utente (0..1)
-    try:
-        min_trust=float(request.form.get('min_trust','0') or 0)
-    except Exception:
-        min_trust=0.0
+    df = (request.form.get('date_from') or '').strip()
+    dt = (request.form.get('date_to') or '').strip()
 
-    df=(request.form.get('date_from') or '').strip()
-    dt=(request.form.get('date_to') or '').strip()
-
-    q={}
-    if not scope_all:
-        q['user_id']=current_user.id
-    if only_consented:
-        q['consent_training']=True
+    # filtro base
+    q = {}
+    if not scope_all: q['user_id'] = current_user.id
+    if only_consented: q['consent_training'] = True
     if df:
         try: q.setdefault('timestamp',{})['$gte']=datetime.datetime.fromisoformat(df)
         except Exception: pass
@@ -805,103 +925,218 @@ def do_export():
         try: q.setdefault('timestamp',{})['$lte']=datetime.datetime.fromisoformat(dt)
         except Exception: pass
 
-    # helper: recupera fiducia dell'utente proprietario della predizione
-    def _user_trust_from_pred(pred) -> float:
-        uid = pred.get('user_id')
-        if not uid:
-            return 0.5
-        try:
-            u = users_collection.find_one({'_id': ObjectId(uid)})
-            if u and isinstance(u.get('trust'), (int, float)):
-                return float(u['trust'])
-        except Exception:
-            pass
-        return 0.5
+    preds = list(predictions_collection.find(q).sort('timestamp', -1))
 
-    preds=list(predictions_collection.find(q).sort('timestamp',-1))
+    # calcolo trust per gli user presenti nel set
+    uids = sorted({p.get('user_id') for p in preds if p.get('user_id')})
+    trust_map = {uid: compute_user_trust(uid) for uid in uids}
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp=Path(tmpdir)
-        images_root=tmp/"images"
+        tmp = Path(tmpdir)
+        images_root = tmp / "images"
         images_root.mkdir(parents=True, exist_ok=True)
-        rows=[]; copied=0; skipped=0
 
+        rows = []
         for d in preds:
-            # confidenza minima del modello
+            # filtri dinamici
             if d.get('prob') is not None and float(d.get('prob')) < min_conf:
                 continue
-
-            # filtro fiducia utente
-            user_trust = _user_trust_from_pred(d)
+            uid = d.get('user_id')
+            user_trust = trust_map.get(uid, 0)
             if user_trust < min_trust:
                 continue
 
-            # etichetta e peso base (prima della fiducia)
             label_final, src, base_w = compute_label_and_weight(d)
-            if (src=='unverified') and not include_unverified:
+            if (src == 'unverified') and not include_unverified:
                 continue
 
-            # copia immagine (se presente/consentita)
-            lf=materialize_image_local(d, images_root)
+            # copia immagine (se presente)
+            lf = materialize_image_local(d, images_root)
             if not lf or not lf.exists():
-                skipped+=1; continue
+                # senza immagine ha poco senso esportarla
+                continue
 
-            sub=label_final if label_final in CLASS_NAMES else 'unverified'
-            td=images_root/sub; td.mkdir(exist_ok=True, parents=True)
-            final=td/lf.name
-            shutil.move(str(lf),str(final))
-            copied+=1
+            # sotto-cartella per classe (o 'unverified')
+            sub = label_final if label_final in CLASS_NAMES else 'unverified'
+            td = images_root / sub
+            td.mkdir(exist_ok=True, parents=True)
+            final = td / lf.name
+            shutil.move(str(lf), str(final))
 
-            # peso finale = base * (0.5 + 0.5*trust)  -> range sempre 0..1
-            trust_factor = 0.5 + 0.5 * user_trust
-            final_weight = max(0.0, min(1.0, base_w * trust_factor))
+            # peso finale: base pesato per la fiducia utente (0.5–1.0)
+            trust_factor = 0.5 + 0.5 * (user_trust / 100.0)
+            weight_final = base_w * trust_factor
 
-            row={
-                'id':str(d.get('_id')),
-                'filename':final.name,
-                'label_final':label_final,
-                'label_source':src,
-                'weight':f"{final_weight:.4f}",
-                'model_confidence':f"{float(d.get('prob') or 0.0):.6f}",
-                'feedback':d.get('feedback') or '',
+            row = {
+                'id': str(d.get('_id')),
+                'filename': final.name,
+                'label_final': label_final,
+                'label_source': src,
+                'weight': f"{weight_final:.4f}",
+                'model_confidence': f"{float(d.get('prob') or 0.0):.6f}",
+                'feedback': d.get('feedback') or '',
                 'correct_class_feedback': d.get('correct_class_feedback') or '',
                 'timestamp': (d.get('timestamp') or datetime.datetime.utcnow()).isoformat(),
-                'user_trust': f"{user_trust:.4f}",
+                'user_trust': user_trust,
             }
             if include_user_hash:
-                pepper=os.environ.get('USER_HASH_PEPPER','pepper-default-change-me')
-                row['user_hash']=hmac.new(
+                pepper = os.environ.get('USER_HASH_PEPPER','pepper-default-change-me')
+                row['user_hash'] = hmac.new(
                     pepper.encode('utf-8'),
-                    str(d.get('user_id')).encode('utf-8'),
+                    str(uid).encode('utf-8'),
                     hashlib.sha256
                 ).hexdigest()
 
             rows.append(row)
 
         # CSV
-        csv_path=tmp/"dataset.csv"
+        csv_path = tmp / "dataset.csv"
         with open(csv_path,'w',newline='',encoding='utf-8') as f:
-            fields=['id','filename','label_final','label_source','weight',
-                    'model_confidence','feedback','correct_class_feedback',
-                    'timestamp','user_trust']
-            if include_user_hash:
-                fields.append('user_hash')
-            w=csv.DictWriter(f, fieldnames=fields)
-            w.writeheader()
-            w.writerows(rows)
+            fields = [
+                'id','filename','label_final','label_source','weight',
+                'model_confidence','feedback','correct_class_feedback','timestamp',
+                'user_trust'
+            ]
+            if include_user_hash: fields.append('user_hash')
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader(); w.writerows(rows)
 
-        # ZIP
-        zip_name=f"smart_waste_export_{datetime.datetime.utcnow():%Y%m%d_%H%M%S}.zip"
-        buf=io.BytesIO()
+        # ZIP (dataset.csv + images/)
+        zip_name = f"smart_waste_export_{datetime.datetime.utcnow():%Y%m%d_%H%M%S}.zip"
+        buf = io.BytesIO()
         with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
             z.write(csv_path, arcname="dataset.csv")
             for p in images_root.rglob('*'):
-                if p.is_file():
-                    z.write(p, arcname=str(p.relative_to(tmp)))
+                if p.is_file(): z.write(p, arcname=str(p.relative_to(tmp)))
         buf.seek(0)
         return send_file(buf, as_attachment=True, download_name=zip_name, mimetype='application/zip')
 
-# === Run ======================================================================
+# === Admin: pannello fiducia (tabella + JSON) =================================
+@app.route('/admin/trust')
+@login_required
+def admin_trust():
+    """Tabella riassuntiva (admin) con metriche di fiducia utente."""
+    if getattr(current_user,'role','user')!='admin': abort(403)
+
+    # Prendiamo tutti gli utenti “attivi” (almeno una predizione)
+    pipeline = [
+        {"$group": {"_id": "$user_id", "total": {"$sum": 1}}},
+        {"$sort": {"total": -1}},
+        {"$limit": 10000}
+    ]
+    agg = list(predictions_collection.aggregate(pipeline))
+    rows = []
+    for a in agg:
+        uid = a["_id"]
+        total = a["total"]
+        # recupero info utente
+        udoc = users_collection.find_one({"_id": ObjectId(uid)}) if uid else None
+        username = (udoc or {}).get("username") or uid
+        email    = (udoc or {}).get("email")
+        n_correct   = predictions_collection.count_documents({'user_id': uid, 'feedback':'correct'})
+        n_incorrect = predictions_collection.count_documents({'user_id': uid, 'feedback':'incorrect'})
+        verified = n_correct + n_incorrect
+        correct_lb   = wilson_lower_bound(n_correct, verified) if verified else 0.0
+        consent_rate = predictions_collection.count_documents({'user_id': uid, 'consent_training': True}) / total if total else 0.0
+        verify_rate  = verified / total if total else 0.0
+        trust = compute_user_trust(uid)
+        rows.append(type('Row', (), {
+            "username": username,
+            "email": email,
+            "total": total,
+            "n_correct": n_correct,
+            "n_incorrect": n_incorrect,
+            "correct_rate_lb": correct_lb,
+            "consent_rate": consent_rate,
+            "trust": trust
+        }))
+    return render_template('admin_trust.html', rows=rows)
+
+@app.route('/admin/trust.json')
+@login_required
+def admin_trust_json():
+    """API JSON (admin) con metriche di fiducia utente."""
+    if getattr(current_user,'role','user')!='admin': abort(403)
+
+    pipeline = [
+        {"$group": {"_id": "$user_id", "total": {"$sum": 1}}},
+        {"$sort": {"total": -1}},
+        {"$limit": 100000}
+    ]
+    agg = list(predictions_collection.aggregate(pipeline))
+    out = []
+    for a in agg:
+        uid = a["_id"]
+        total = a["total"]
+        n_correct   = predictions_collection.count_documents({'user_id': uid, 'feedback':'correct'})
+        n_incorrect = predictions_collection.count_documents({'user_id': uid, 'feedback':'incorrect'})
+        verified = n_correct + n_incorrect
+        correct_lb   = wilson_lower_bound(n_correct, verified) if verified else 0.0
+        consent_rate = predictions_collection.count_documents({'user_id': uid, 'consent_training': True}) / total if total else 0.0
+        verify_rate  = verified / total if total else 0.0
+        trust = compute_user_trust(uid)
+        out.append({
+            "user_id": uid,
+            "total": total,
+            "verified": verified,
+            "n_correct": n_correct,
+            "n_incorrect": n_incorrect,
+            "correct_lb": correct_lb,
+            "verify_rate": verify_rate,
+            "consent_rate": consent_rate,
+            "trust": trust
+        })
+    return jsonify({"count": len(out), "users": out})
+
+# === Avvio (stampa URL utili e serve multi-device) ============================
+def _lan_ips():
+    """
+    Raccoglie IP locali IPv4 non-loopback.
+    Utile per stampare gli indirizzi a cui connettersi da telefono/altri PC.
+    """
+    ips = set()
+    # IP “primario” usato per uscire su internet (trucco del socket UDP)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.add(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    # IP risolti dall’hostname
+    try:
+        for fam, _, _, _, sa in socket.getaddrinfo(socket.gethostname(), None):
+            if fam == socket.AF_INET:
+                ip = sa[0]
+                if not ip.startswith("127."):
+                    ips.add(ip)
+    except Exception:
+        pass
+    return sorted(ips)
+
 if __name__ == '__main__':
-    app.run(debug=True, host=os.environ.get('FLASK_RUN_HOST','127.0.0.1'),
-            port=int(os.environ.get('FLASK_RUN_PORT','5000') or 5000))
+    # Default: ascolta su tutta la LAN (comodo per usare anche da smartphone/altro PC).
+    # Cambia DEFAULT_HOST in '127.0.0.1' per limitarlo al solo PC locale.
+    DEFAULT_HOST = '0.0.0.0'
+    host = os.environ.get('FLASK_RUN_HOST', DEFAULT_HOST)
+    port = int(os.environ.get('FLASK_RUN_PORT', '5000') or 5000)
+
+    def _print_urls_once():
+        """Stampa gli URL utili (localhost e LAN) una sola volta all'avvio."""
+        print("")
+        print(f"PC (localhost):   http://127.0.0.1:{port}/app")
+        if host in ('0.0.0.0', '::'):
+            ips = _lan_ips()
+            for ip in ips:
+                print(f"LAN (altri device): http://{ip}:{port}/app")
+            if ips:
+                print("\nSe il firewall chiede, consenti sulle 'Reti Private'.")
+        print("\nLascia questa finestra aperta. Chiudi con CTRL+C.\n")
+
+    # Evita doppia stampa con il reloader di Werkzeug quando debug=True
+    # (Werkzeug riavvia il processo per abilitare l'auto-reload del codice)
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
+        _print_urls_once()
+
+    # threaded=True per gestire più client contemporaneamente in sviluppo
+    app.run(debug=True, host=host, port=port, threaded=True)
