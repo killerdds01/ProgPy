@@ -1,0 +1,6 @@
+La cartella profile_photos/ contiene:
+    -Le foto profilo degli utenti nel formato profile_<userId>.<text>
+
+    L'accesso è protetto lato server(controllo owner/admin), non sono pubbliche
+
+    Si svuto automaticamente quando un utente elimina il suo profilo

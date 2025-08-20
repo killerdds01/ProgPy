@@ -1,0 +1,49 @@
+.venv (virtual enviroment)
+venv è uno strumento integrato in Python, a partire dalla versione 3.3, che serve per creare e gestire ambienti virtuali isolati
+    Contiene:
+        pyvenv.cfg
+            File di configurazione dell'ambiente. Indica:
+            -il percorso di Python usato per creare il venv(virtual enviroment)
+            -la versione di Python
+            -se include i pacchetti di sistema(Se sposti o elimini il Python   "base" venv può rompersi, in quel caso devi ricrearlo)
+        Scripts
+            Eseguibili e script di attivazione:
+            -python.exe, pythow.exe: interpreti del venv
+            -pip.exe e pip3.exe: gestore pacchetti in venv
+            -activate.bat, Activate.ps1, activate: scropit per attivare l'ambiente
+        Lib
+            Contiene le librie installate con pip(NON MODIFICARE A MANO)
+        Include
+            Header e file necessari quando vengono compilate estensioni C/C++
+        Share
+            Irrilevante per questo progetto
+        .gitignore
+            Serve a non versionare il venv, ricreare l'ambiente con requirements.txt
+
+    Comandi utili(Windows):
+        :: Creare il venv se manca
+        python -m venv .venv
+
+        :: Attivare l'ambiente
+        .\.venv\Scripts\activate.bat
+        :: (PowerShell) .\.venv\Scripts\Activate.ps1
+        :: Se PS blocca gli script: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+        :: Aggiornare pip e installare le dipendenze
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+        :: Congelare le versioni (aggiornare requirements.txt)
+        pip freeze > requirements.txt
+
+        :: Disattivare
+        deactivate
+
+
+    Come si collega al progetto:
+        Gli script run_mobile*.batfanno:
+            -call .venv\Scripts\activate.bat
+            -avviano python app.py con l'interprete del venv
+        Se lanci puthon app.py dal terminale di VS Code, assicurati che l'interprete sia .\venv\Scripts\python.exe
+        Tutte le librerie in requirements.txt vengono installate dentro .venv
+

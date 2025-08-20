@@ -1,0 +1,6 @@
+La cartella mongo_data/ contiene:
+    -dati persistenti di MongoDB quando usi l'autostart locale(MONGO_AUTOSTART=True)
+
+    Viene utilizzata ed avviata automaticamente dall'app
+
+    Consigliato un sistema di backup(non incluso nell'app)
