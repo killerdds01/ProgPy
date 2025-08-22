@@ -1,0 +1,18 @@
+static/ contiene tutti i file serviti "così come sono" al browser: JS, CSS, font, icone...
+quindi che non passano dalla logica di Python be dal motore del template
+Tutto quello che è instatic è pubblico
+    Contiene:
+        static/static/js/
+            -JS lato client, lo script dell'interfaccia index e profile
+        static/static/css/
+            -Flogli di stile, usiamo Tailwind voa CND, am possono tornare utili
+        static/static/img
+            -Immagini utili, in questo caso quella sul caricamento di index
+Flask serve gli statici con cache HTTP
+CSP (Content-Security-Policy): imostiamo gli heaer restrittivi:
+    default-src 'self'
+    img-src 'self' data: blob:
+    style-src 'self' 'unsafe-inline' https://cnd.tailwindscss.com
+    script-src 'self' 'unsafe-inline' https://cnd.tailwindscss.com
+Quindi JS/CSS devono venire da /static o dal CND di Tailwind
+Le immagini possono essere locali, data: e blob:
