@@ -1,0 +1,130 @@
+static/static/js/index.js
+    cosa fa:
+    - gestisce tutta la UI della pagina “Classificazione”
+    - selezione immagine (desktop: click/drag&drop/incolla; mobile: galleria o fotocamera)
+    - anteprima locale (URL blob) e abilitazione/disabilitazione dei pulsanti
+    - invio dell’immagine al backend (/predict) con consenso opzionale
+    - visualizzazione classe/confidenza e raccolta feedback (/feedback)
+    - gestione stato “predizione pendente” (preload) con blocco dell’uploader finché non rispondi
+
+    dove sta / come si carica:
+        - file statico servito da Flask
+        - incluso in templates/index.html con <script defer>
+        - non richiede librerie esterne
+
+    dati attesi dal template (script #page-data):
+        - csrf: token CSRF (se presente viene aggiunto alle fetch)
+        - preload: oggetto { id, cls, conf } se esiste una predizione in sospeso
+        - preload_img_url: URL protetto dell’immagine della predizione pendente (opzionale)
+
+    elementi richiesti in pagina (id):
+        - dropzone, fileInput
+        - previewWrap, previewImg
+        - consentCheckbox
+        - mobileBar, pickGallery, openCamera
+        - predictBtn, clearBtn
+        - resultEmpty, resultCard, resClass, resConf
+        - btnCorrect, btnWrong, correctionRow, correctionSelect, sendCorrection
+        - resultMsg
+
+    flusso utente:
+        1) rileva il device
+        - mobile: mostra barra “Galleria / Scatta foto”, nasconde la dropzone
+        - desktop: mostra la dropzone con drag&drop e supporto incolla
+        2) selezione immagine
+        - click sulla dropzone/anteprima, drag&drop, incolla (Ctrl+V), bottoni mobile
+        3) controlli client “best effort”
+        - tipo/estensione: accetta image/*; lascia HEIC/HEIF al controllo del server
+        - dimensioni minime: 96×96 px (se non leggibile lato client non blocca)
+        - dimensione massima: 10 MB
+        4) anteprima
+        - crea URL blob, mostra preview, abilita “Predici”, nasconde la dropzone
+        5) invio
+        - POST /predict con FormData { file, consent_training: on/off }
+        - overlay “Attendere…”, timeout, gestione errori
+        6) risultato
+        - aggiorna classe/confidenza, salva prediction_id
+        7) feedback
+        - “È corretta”: POST /feedback { prediction_id, feedback_type:'correct' }
+        - “È sbagliata”: mostra select e invia POST /feedback { prediction_id, 'incorrect', correct_class }
+        8) pulizia
+        - “Pulisci” ripristina UI e riabilita l’upload
+
+    stato “predizione pendente”:
+        - se preload è presente: mostra subito la card risultato
+        - se preload_img_url è presente: mostra anche l’anteprima immagine
+        - congela l’uploader finché non invii il feedback
+        - usa window.__LAST_PREDICTION_ID__ per ricordare la predizione corrente
+
+    validazioni lato client:
+        - tipi consentiti: image/* (+ controllo estensione .jpg/.jpeg/.png/.webp/.heic/.heif)
+        - dimensione file: max 10 MB
+        - dimensioni immagine: min 96×96 px (best effort)
+
+    gestione mobile:
+        - preferisce “Galleria” come flusso principale
+        - “Scatta foto” abilita capture=environment sullo stesso input
+        - accept='image/*' per non escludere HEIC/HEIF (decide il server)
+
+    chiamate al backend:
+        - POST /predict (form-data) → risposta attesa: { class, confidence, prediction_id }
+        - POST /feedback (json)     → risposta attesa: { message } (200 se ok)
+        - preload_img_url punta a /uploads/<filename> (protetto)
+
+    errori gestiti (messaggi):
+        - 413: file troppo grande
+        - 415: formato non supportato
+        - 429: troppe richieste (rate limit)
+        - altri: messaggio generico con codice HTTP
+        - errori rete/timeout: messaggio generico e rimozione overlay
+
+    sicurezza/robustezza:
+        - invia X-CSRFToken se disponibile
+        - overlay e disabilitazione pulsanti durante le richieste
+        - revoca gli URL blob quando non servono e in beforeunload
+        - timeout su fetch (20–25s) per evitare attese infinite
+
+    parametri modificabili velocemente:
+        - MIN_W/MIN_H per dimensioni minime
+        - MAX_SIZE per dimensione massima file
+        - testi utente in showMsg()
+        - timeout in fetchWithTimeout()
+        - logica di isMobile() se vuoi criteri diversi
+
+    note:
+        - l’elenco classi nella select correzioni arriva dal template (class_names)
+        - rispettare la CSP: script servito da /static e caricato con defer
+        - se cambi gli id nel template, aggiorna i riferimenti nello scr
+
+
+static/static/js/profile.js
+
+    cosa fa:
+    - gestisce il toggle “mostra/nascondi password” nei form del profilo
+    - nessuna logica di rete, solo UI
+
+    dove sta / come si carica:
+        - file statico servito da Flask
+        - incluso in templates/profile.html con <script defer>
+        - nessuna dipendenza esterna
+
+    come funziona:
+        - al DOMContentLoaded cerca tutti gli elementi con classe .eye-btn
+        - ogni .eye-btn deve avere l’attributo data-target con il name dell’input password da controllare
+        - al click inverte il tipo dell’input tra 'password' e 'text'
+
+    requisiti nel template:
+        - input password con name coerente (es. name="password", name="confirm_password")
+        - pulsante/icone con class="eye-btn" e data-target="nome_corrispondente"
+
+    sicurezza/robustezza:
+        - non salva nulla, modifica solo l’attributo type dell’input
+        - funziona anche con più campi password nella stessa pagina
+
+    personalizzazioni:
+        - puoi cambiare la classe selettore (.eye-btn) o l’attributo (data-target)
+        - puoi aggiungere animazioni/icone al click senza toccare la logica
+
+    note:
+        - se rinomini i campi password o i pulsanti, aggiorna data-target di conseguenza
+        - lo script non interferisce con la validazione server-side dei form

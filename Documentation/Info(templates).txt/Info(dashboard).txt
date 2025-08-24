@@ -1,0 +1,30 @@
+dashboard.html (storico predizioni)
+    cosa fa:
+        - mostra le predizioni dell’utente con filtri
+        - link/anteprime immagini proprie (protette)
+
+    contiene:
+        - filtri:
+            - classe (select con CLASS_NAMES)
+            - stato (all/pending/correct/incorrect)
+            - date from / to (ISO)
+            - “nascondi immagini” per view compatta
+        - tabella o lista delle predizioni:
+            - classe, confidenza, feedback, timestamp
+            - anteprima immagine (se non nascosta)
+            - pulsante elimina predizione (cancella anche file)
+        - messaggi (es. “nessun risultato”)
+
+    dipendenze:
+        - nessun JS obbligatorio (filtri via querystring)
+        - Tailwind dalla base
+
+    dati dal server:
+        - predictions (lista filtrata)
+        - class_counts (conteggio per classe)
+        - pending_exists (flag)
+        - valori dei filtri correnti per mantenere lo stato
+
+    note:
+        - route protetta (login richiesto)
+        - le immagini sono servite da /uploads/<filename> con controllo owner

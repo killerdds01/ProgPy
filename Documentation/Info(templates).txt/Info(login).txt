@@ -1,0 +1,24 @@
+login.html (accesso)
+    cosa fa:
+        - form per autenticarsi via Flask-Login
+        - opzione “Ricordami”
+
+    contiene:
+        - form con campi:
+            - username (email o username)
+            - password
+            - remember (checkbox)
+        - pulsante Accedi
+        - link a /register
+        - messaggi flash per errori credenziali
+
+    dipendenze:
+        - nessuno script specifico
+        - Tailwind da base.html
+
+    dati dal server:
+        - Flask-WTF: form + CSRF
+        - eventuale redirect dopo login (gestito dal server)
+
+    note:
+        - la validazione server-side gestisce errori / rate limit

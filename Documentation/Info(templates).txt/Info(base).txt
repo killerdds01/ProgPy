@@ -1,0 +1,20 @@
+base.html (layout principale)
+    cosa fa:
+        - definisce la struttura comune delle pagine (head, navbar, footer, contenitore centrale)
+        - espone i blocchi Jinja: title, content (ed eventuali altri) per i template figli
+
+    contiene:
+        - <head> con meta, favicon (se presente), inclusione Tailwind via CDN
+        - meta CSRF (se usata) per i JS che la leggono
+        - header/nav con link (login/logout, dashboard, ecc.) in base a current_user
+        - contenitore <main> dove i figli iniettano il proprio contenuto
+        - eventuali messaggi flash (success/error/info) resi visibili all’utente
+        - footer minimale
+
+    dipendenze:
+        - Tailwind (via CDN, consentito dalla CSP)
+        - eventuali script globali caricati in fondo (non obbligatori)
+
+    note:
+        - tutti i template dovrebbero estenderla con: {% extends "base.html" %}
+        - se aggiungi script globali, restare entro CSP (self + CDN Tailwind)

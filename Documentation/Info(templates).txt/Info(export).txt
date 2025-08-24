@@ -1,0 +1,24 @@
+export.html (admin → export dataset)
+    cosa fa:
+        - form per generare lo zip del dataset annotato + immagini
+
+    contiene:
+        - opzioni:
+            - include_unverified (on/off)
+            - include_user_hash (on/off, anonimizzazione)
+            - scope: all / mine
+            - only_consented (default on)
+            - min_conf (float 0..1)
+            - min_trust (0..100)
+            - date_from / date_to
+        - select classi (se presente) e pulsante “Esporta”
+        - risposta: download ZIP (stream)
+
+    dipendenze:
+        - nessun JS obbligatorio
+        - Tailwind via base
+
+    note:
+        - route limitata a role=admin
+        - il CSV nel pacchetto è dataset.csv
+        - le immagini vengono ricollocate per classe nella cartella images/

@@ -1,0 +1,30 @@
+profile.html (profilo utente)
+    cosa fa:
+        - modifica dati base (nome, cognome, consenso default training)
+        - upload foto profilo (ridimensionata lato server)
+        - cambio password
+        - cancellazione account
+
+    contiene:
+        - sezione dati utente (nome, cognome, checkbox consenso) + “Salva”
+        - sezione foto profilo:
+            - input file + anteprima (caricata da /profile/photo/<filename>)
+            - POST a /profile/photo
+        - sezione password:
+            - old_password, new_password, confirm_password
+            - pulsante “Aggiorna password”
+            - icone occhio (toggle) gestite da static/static/js/profile.js
+        - sezione “Elimina account” (form POST a /account/delete)
+        - messaggi flash (success/error)
+
+    dipendenze:
+        - static/static/js/profile.js (toggle password)
+        - Tailwind via base
+
+    dati dal server:
+        - user (doc dell’utente corrente) per riempire i campi e mostrare l’avatar
+        - CSRF da Flask-WTF
+
+    note:
+        - tutte le azioni sono protette (login richiesto + CSRF)
+        - l’eliminazione account rimuove anche immagini/record associati

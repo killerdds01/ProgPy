@@ -1,0 +1,22 @@
+register.html (registrazione)
+    cosa fa:
+        - crea un nuovo utente nel DB
+
+    contiene:
+        - form con campi:
+            - username (opzionale)
+            - nome, cognome
+            - email
+            - password, conferma password
+            - consent_training_default (checkbox)
+            - accept_tos (checkbox, obbligatoria)
+        - pulsante Registrati
+        - messaggi flash (email già usata, ecc.)
+
+    dipendenze:
+        - Flask-WTF (CSRF)
+        - Tailwind via base.html
+
+    note:
+        - la logica password/validazioni è lato server
+        - al successo: redirect a /login

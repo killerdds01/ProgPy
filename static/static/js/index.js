@@ -189,7 +189,7 @@
       return true;
     }
 
-    // API moderna e veloce
+    // API createImageBitmap 
     try {
       if (window.createImageBitmap) {
         const bmp = await createImageBitmap(file);

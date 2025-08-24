@@ -1,0 +1,18 @@
+error.html (pagine errore)
+    cosa fa:
+        - renderizza le pagine di errore personalizzate (400/401/403/404/413/429/500/503)
+
+    contiene:
+        - codice e messaggio passato dal server (es. “Database offline”)
+        - link per tornare indietro o alla home
+
+    dipendenze:
+        - nessun JS
+        - Tailwind via base
+
+    dati dal server:
+        - code (int)
+        - message (string)
+
+    note:
+        - invocato dai decorator @app.errorhandler(...)

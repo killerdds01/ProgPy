@@ -1,0 +1,19 @@
+admin_trust.html (admin → fiducia utenti)
+    cosa fa:
+        - mostra una tabella con metriche per utente:
+            - total predizioni, correct/incorrect, correct_rate_lb (Wilson LB)
+            - consent_rate, trust (0..100)
+
+    contiene:
+        - tabella con righe utente
+        - (opzionale) link a /admin/trust.json per export JSON
+
+    dipendenze:
+        - nessun JS obbligatorio
+        - Tailwind via base
+
+    dati dal server:
+        - rows (lista di oggetti con i campi calcolati)
+
+    note:
+        - route limitata a role=admin

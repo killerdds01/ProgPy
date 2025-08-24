@@ -1,0 +1,28 @@
+templates/ (motore Jinja2)
+    Contiene i file HTML che vengono renderizzati dal server Flask.
+    I template possono "estendere" base.html e iniettare blocchi (title, content, ecc.).
+
+    Mappa route → template:
+        /                      → landing.html
+        /app                   → index.html (pagina classificazione)
+        /register              → register.html
+        /login                 → login.html
+        /dashboard             → dashboard.html
+        /profile               → profile.html
+        /profile/photo         → (POST upload) → redirect a profile.html
+        /account/export        → (JSON API) non ha template
+        /export (GET)          → export.html
+        /export (POST)         → (response ZIP) non ha template
+        /admin/trust           → admin_trust.html
+        error handlers (400…503) → error.html
+
+    Dipendenze front-end:
+        - Gli statici (JS/CSS/img) sono in /static (serviti “as-is”)
+        - CSP: solo risorse locali + CDN Tailwind (script/style)
+        - index.html include static/static/js/index.js
+        - profile.html include static/static/js/profile.js
+
+    Convenzioni:
+        - Quasi tutti i template estendono base.html
+        - Gli ID usati da index.js sono definiti in index.html (dropzone, fileInput, ecc.)
+        - I CSRF token sono passati nel template e/o via <script id="page-data">

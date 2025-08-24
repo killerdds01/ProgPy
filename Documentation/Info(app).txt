@@ -1,0 +1,137 @@
+app.py (server Flask)
+    cosa fa:
+        - è il backend dell’app Smart Waste
+        - gestisce autenticazione (registrazione/login/logout)
+        - riceve immagini, esegue inferenza PyTorch, salva predizioni e feedback
+        - espone pagine HTML (Jinja2) e API JSON (predict/feedback/export)
+        - gestisce upload protetti e privacy/consenso
+        - esporta dataset pesato (per riaddestramento)
+
+    dipendenze principali:
+        - Flask, Flask-Login, Flask-WTF, flask-cors
+        - python-dotenv (lettura .env)
+        - pymongo (MongoDB)
+        - pillow (+ pillow-heif opzionale per HEIC/HEIF)
+        - torch, torchvision (modello ResNet18)
+        - email-validator (per WTForms)
+        - (opzionale) Flask-Limiter (rate limit; se assente è no-op)
+
+    struttura storage locale:
+        uploaded_images/
+            - immagini caricate dagli utenti per le predizioni
+            - accesso protetto: servite solo al proprietario via /uploads/<filename>
+        profile_photos/
+            - foto profilo, nome: profile_<userId>.<ext>
+            - accesso protetto: proprietario o admin
+        mongo_data/
+            - dati MongoDB locali se usi MONGO_AUTOSTART=true
+        static/static/
+            - file statici pubblici (JS/CSS/img) serviti “as is”
+        templates/
+            - template Jinja2 (HTML) renderizzati dal server
+
+    variabili .env usate (tutte opzionali, valori di esempio):
+        SECRET_KEY=…                         (chiave Flask/WTF/CSRF)
+        PASSWORD_PEPPER=…                    (pepper extra per hash password)
+        USER_HASH_PEPPER=…                   (pepper HMAC per export anonimo)
+        FLASK_RUN_HOST=0.0.0.0              (in dev, ascolta su LAN)
+        FLASK_RUN_PORT=5000
+        MONGO_URL=mongodb://127.0.0.1:27017/
+        MONGO_AUTOSTART=true|false           (dev: prova ad avviare mongod)
+        MONGO_BIN=C:\...\mongod.exe          (path esplicito mongod su Windows)
+        MONGO_DBPATH=./mongo_data
+        MONGO_PORT=27017
+        MODEL_PATH=best_model_finetuned_light.pth
+        ADMIN_USERNAME=admin                 (bootstrap admin facoltativo)
+        ADMIN_PASSWORD=…                     (se non dato, random)
+
+    modello ML:
+        - ResNet18 con testa sostituita a 5 classi: plastica, carta, vetro, organico, indifferenziato
+        - DEVICE: CPU (portabilità). Se vuoi GPU, adatta device e deploy.
+        - i pesi sono caricati da MODEL_PATH (default best_model_finetuned_light.pth)
+        - temperature scaling (calibration.json) per probabilità più “honest”
+        - trasformazioni: Resize(256), CenterCrop(224), Normalize (ImageNet)
+
+    sicurezza:
+        - autenticazione: Flask-Login (sessione “permanent” con idle timeout)
+        - CSRF: Flask-WTF (disabilitato solo per /predict e /feedback per i fetch)
+        - CSP (Content-Security-Policy) restrittiva:
+            default-src 'self'
+            img-src 'self' data: blob:
+            style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com
+            script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com
+            connect-src 'self'
+        - cookie: Secure=False in dev (mettere True in prod su HTTPS)
+        - rate limit: se Flask-Limiter è presente, limita per rotta (altrimenti no-op)
+        - immagini protette: /uploads/<filename> verifica owner
+        - consenso: se l’utente nega il consenso, l’immagine viene cancellata dal disco
+        - filtro dimensioni minime: 96x96 px (anti micro-immagini)
+
+    middleware utili:
+        - idle_logout: logout automatico dopo 45 minuti di inattività
+        - require_db_if_needed: se MongoDB non è up → solo landing/login/register/static
+        - force_feedback_before_navigation: se c’è una predizione “pending”
+          in sessione, l’utente deve confermare/correggere prima di girare altrove
+
+    mapping route → template/API:
+        GET  /                     → landing.html (public)
+        GET  /app                  → index.html (login richiesto)
+        GET  /dashboard            → dashboard.html (login)
+        GET  /profile              → profile.html (login)
+        POST /profile              → update profilo (login)
+        POST /profile/photo        → upload foto profilo (login)
+        GET  /profile/photo/<fn>   → serve foto (owner/admin)
+        POST /profile/password     → cambio password (login)
+        POST /account/delete       → elimina account + dati (login)
+        GET  /account/export       → JSON con le mie predizioni
+        POST /predict              → JSON {class, confidence, prediction_id}
+        POST /feedback             → JSON conferma/correzione
+        GET  /uploads/<filename>   → serve immagine protetta (owner)
+        POST /prediction/<id>/delete → elimina predizione + immagine (login)
+        GET  /export               → export.html (admin)
+        POST /export               → ZIP (dataset.csv + images/) (admin)
+        GET  /admin/trust          → admin_trust.html (admin)
+        GET  /admin/trust.json     → JSON metriche fiducia (admin)
+        error handlers 400..503    → error.html
+
+    pipeline di predizione:
+        1) client invia FormData(file + consent_training) a /predict
+        2) validazione lato server (MIME, dimensioni minime, HEIC opzionale)
+        3) preprocessing + inferenza modello
+        4) salvataggio su MongoDB come “pending” + memorizza prediction_id in sessione
+        5) client mostra classe/confidenza, poi invia feedback (correct/incorrect)
+        6) se incorrect, l’utente sceglie la classe corretta
+        7) se manca il consenso: il file immagine viene cancellato subito
+
+    export dataset (admin):
+        - filtri: conf minima, trust minimo utente, date, consenso “true”, includi/non verificate
+        - etichetta finale:
+            correct          → label predetta, source=user_verified, base_w=1.0
+            incorrect+correz → label corretta,  source=user_corrected, base_w=0.9
+            altrimenti       → label predetta,  source=unverified,    base_w=0.3
+        - peso finale = base_w × trust_factor(utente) con trust_factor ∈ [0.5, 1.0]
+        - anonimizzazione opzionale: user_hash = HMAC_SHA256(user_id, USER_HASH_PEPPER)
+        - pacchetto ZIP: dataset.csv + images/<classe>/*.jpg
+
+    come avviare (sviluppo):
+        1) attiva il venv e installa requirements.txt
+        2) assicurati che MongoDB sia raggiungibile (o MONGO_AUTOSTART=true)
+        3) python app.py
+        4) apri gli URL stampati (localhost/LAN)
+
+    note production:
+        - usa un WSGI (gunicorn/uwsgi) dietro Nginx/Apache con HTTPS
+        - imposta SESSION_COOKIE_SECURE/REMEMBER_COOKIE_SECURE=True
+        - imposta SECRET_KEY forte, disabilita debug, chiudi /export e /admin/* agli utenti non autorizzati
+        - dimensiona storage per uploaded_images/ e backup DB
+
+    troubleshooting (rapido):
+        - “Database offline”:
+            * controlla MONGO_URL, porta, e se mongod gira
+            * in dev abilita MONGO_AUTOSTART e MONGO_BIN corretto
+        - “Formato non supportato (415)”:
+            * HEIC/HEIF richiedono pillow-heif installato
+        - “Immagine troppo piccola”:
+            * il client può non leggere dimensioni da HEIC: il check definitivo è server-side (96x96)
+        - “Troppe richieste (429)”:
+            * rate limiter attivo; aspetta o alza i limiti in dev

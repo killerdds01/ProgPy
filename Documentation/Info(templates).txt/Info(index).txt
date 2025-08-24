@@ -1,0 +1,43 @@
+index.html (pagina Classificazione)
+    cosa fa:
+        - UI per caricare un’immagine e ottenere la predizione del modello
+        - mostra classe/confidenza e raccoglie feedback (corretta / sbagliata + correzione)
+
+    contiene:
+        - sezione uploader:
+            - dropzone (desktop: click/drag&drop/incolla)
+            - barra mobile con “Scegli dalla galleria” e “Scatta foto”
+            - checkbox “consento uso immagine per addestrare il modello”
+            - anteprima immagine selezionata
+            - pulsanti Predici / Pulisci
+        - sezione risultato:
+            - card con classe, confidenza, feedback, select correzione
+            - messaggi di stato/errore
+        - <template id="svg-fallback"> icona fallback se l’SVG non carica
+        - <script id="page-data" type="application/json">
+            - csrf: token CSRF
+            - preload: { id, cls, conf } se esiste predizione pendente
+            - preload_img_url: URL protetto dell’immagine pendente (opzionale)
+
+    dipendenze:
+        - static/static/js/index.js (caricato con defer)
+        - Tailwind (via CDN nella base)
+        - CSP: ok perché gli script sono locali
+
+    dati dal server:
+        - class_names (per popolare la select correzione)
+        - user_default_consent (stato di default della checkbox consenso)
+        - preload (se sessione ha prediction_id pendente)
+        - preload_img_url (se disponibile l’immagine)
+
+    elementi (id) attesi da index.js:
+        - dropzone, fileInput, previewWrap, previewImg, consentCheckbox
+        - mobileBar, pickGallery, openCamera
+        - predictBtn, clearBtn
+        - resultEmpty, resultCard, resClass, resConf
+        - btnCorrect, btnWrong, correctionRow, correctionSelect, sendCorrection
+        - resultMsg
+
+    note:
+        - se modifichi gli id in HTML, aggiorna index.js di conseguenza
+        - preload blocca l’uploader finché non si invia il feedback

@@ -56,7 +56,7 @@ from werkzeug.utils import secure_filename
 
 # ---- Rate-limit opzionale ----------------------------------------------------
 # Se Flask-Limiter non è installato, creiamo un "finto" decoratore .limit()
-# in modo che il codice giri ugualmente (no-op).
+# in modo che il codice giri ugualmente (no-op). Questo evita if/else dappertutto.
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
@@ -78,6 +78,7 @@ from torchvision import models, transforms
 from PIL import Image, UnidentifiedImageError, ImageOps  # ImageOps per exif_transpose
 
 # (Opzionale) Supporto HEIC/HEIF se pillow-heif è installato (foto iPhone, ecc.)
+# Se manca, non blocchiamo l'app: semplicemente rifiutiamo HEIC/HEIF con 415.
 try:
     import pillow_heif  # pip install pillow-heif
     pillow_heif.register_heif_opener()
@@ -95,6 +96,7 @@ load_dotenv()
 
 # === Flask base ===============================================================
 # static_folder: puntiamo a ./static/static così i template possono usare /static/...
+# NB: Tutto in static/ è pubblico e servito così com'è (soggetto a CSP).
 app = Flask(
     __name__,
     static_folder=os.path.join('static', 'static'),
@@ -107,6 +109,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'DEV_KEY_CHANGE_ME')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 # Cookie & sessione (in produzione imposta i flag SECURE=True dietro HTTPS!)
+# PERMANENT_SESSION_LIFETIME: usato anche dall'idle_logout per scadenza inattività.
 app.config.update(
     REMEMBER_COOKIE_DURATION=timedelta(days=14),
     PERMANENT_SESSION_LIFETIME=timedelta(minutes=45),
@@ -118,6 +121,7 @@ app.config.update(
 )
 
 # Limiter (se il pacchetto non c'è, è un no-op)
+# default_limits applicato se il pacchetto è presente.
 limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["200/hour"])
 
 # Cartelle di storage (create se non esistono)
@@ -128,11 +132,12 @@ Path(PROFILE_FOLDER).mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER']  = UPLOAD_FOLDER
 app.config['PROFILE_FOLDER'] = PROFILE_FOLDER
 
-# Tipi MIME supportati per le immagini e mappatura estensione file
+# Tipi MIME supportati per le immagini e mappatura estensione file.
+# Usiamo le estensioni derivate dal MIME per evitare estensioni "fake".
 ALLOWED_MIME = {'image/jpeg', 'image/png', 'image/webp'}
 MIME_TO_EXT  = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}
 
-# Se supporto HEIC attivo, aggiungiamo i MIME e salviamo come .jpg
+# Se supporto HEIC attivo, aggiungiamo i MIME e salviamo come .jpg per coerenza col modello.
 if _HAS_HEIF:
     ALLOWED_MIME = set(ALLOWED_MIME) | {'image/heic', 'image/heif'}
     MIME_TO_EXT.update({'image/heic': '.jpg', 'image/heif': '.jpg'})
@@ -148,7 +153,7 @@ csrf = CSRFProtect(app)
 # === Login manager ============================================================
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login'
+login_manager.login_view = 'login'  # se non autenticato, redirect qui
 
 # === MongoDB (autostart dev) ==================================================
 # Se MONGO_AUTOSTART=true prova ad avviare mongod localmente in dev.
@@ -161,7 +166,7 @@ MONGO_DBPATH = os.environ.get('MONGO_DBPATH', './mongo_data')
 client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000)
 
 def _mongo_up() -> bool:
-    """True se MongoDB risponde al ping, altrimenti False."""
+    """True se MongoDB risponde al ping, altrimenti False (usato a bootstrap e runtime)."""
     try:
         client.admin.command('ping')
         return True
@@ -172,8 +177,7 @@ def _mongo_up() -> bool:
 def _try_start_mongo() -> bool:
     """
     Avvia mongod localmente (solo dev) se abilitato via env e non è up.
-
-    Nota: funziona se hai mongod installato e accessibile. In alternativa specifica MONGO_BIN.
+    Per Windows passa flag per staccare il processo dalla console corrente.
     """
     if not MONGO_AUTO or _mongo_up():
         return _mongo_up()
@@ -196,6 +200,7 @@ def _try_start_mongo() -> bool:
         print(f"[MONGO] Avvio mongod fallito: {e}")
     return False
 
+# Flag + handle collezioni solo se DB è pronto (protezione dai None nel codice sotto)
 DB_READY = _mongo_up() or (_try_start_mongo() and _mongo_up())
 db  = client.smart_waste if DB_READY else None
 predictions_collection = db.predictions if DB_READY else None
@@ -205,11 +210,12 @@ users_collection       = db.users if DB_READY else None
 # Classi previste dal modello (in ordine stabile)
 CLASS_NAMES = ['plastica', 'carta', 'vetro', 'organico', 'indifferenziato']
 
-# Usiamo CPU per semplicità/portabilità
+# Usiamo CPU per semplicità/portabilità (niente dipendenze CUDA nel deploy base)
 device = torch.device("cpu")
 MODEL_PATH = os.environ.get('MODEL_PATH', 'best_model_finetuned_light.pth')
 
 # ResNet18 con testa a N classi (carichiamo solo i pesi, non le weight predefinite)
+# Perché weights=None? Perché carichiamo DI SEGUITO i nostri pesi finetunati.
 model = models.resnet18(weights=None)
 model.fc = nn.Linear(model.fc.in_features, len(CLASS_NAMES))
 try:
@@ -217,7 +223,7 @@ try:
 except TypeError:
     state = torch.load(MODEL_PATH, map_location=device)                     # fallback PyTorch < 2.0
 model.load_state_dict(state)
-model.to(device).eval()
+model.to(device).eval()  # eval(): no dropout, BN in inference
 
 # Temperature scaling (affina le probabilità senza ri-addestrare)
 TEMPERATURE = 1.0
@@ -284,6 +290,7 @@ def load_user(user_id):
     return User(doc) if doc else None
 
 # Bootstrap admin opzionale all'avvio (solo se ADMIN_USERNAME è presente)
+# Perché: per avere almeno un admin al primo run senza toccare il DB a mano.
 admin_username = os.environ.get('ADMIN_USERNAME')
 admin_password = os.environ.get('ADMIN_PASSWORD')
 if admin_username and DB_READY:
@@ -311,6 +318,7 @@ def compute_label_and_weight(doc):
       - feedback == 'correct'                -> (predetta, 'user_verified',   1.0)
       - feedback == 'incorrect' + correzione -> (correzione, 'user_corrected',0.9)
       - altrimenti (non verificata)          -> (predetta, 'unverified',      0.3)
+    Razionale: punire un po' (0.9) i casi corretti dall'utente e meno (0.3) i non verificati.
     """
     pred = doc.get('class','')
     fb   = (doc.get('feedback') or '').strip().lower()
@@ -351,6 +359,7 @@ def compute_user_trust(user_id: str) -> int:
       - accuratezza verificata (Wilson LB)
       - quanto spesso verifica (verify_rate)
       - quanto spesso consente l'uso per training (consent_rate)
+    Pesi: 0.65, 0.20, 0.15 — conservativi per privilegiare la qualità dei feedback.
     """
     total = predictions_collection.count_documents({'user_id': user_id})
     if total == 0:
@@ -385,6 +394,7 @@ def require_db_if_needed():
     """
     Blocca l'accesso alle pagine che richiedono DB quando il DB non è pronto.
     Le uniche pagine accessibili in tal caso sono landing/login/register/static.
+    Razionale: UX chiara quando il DB è giù (dev o failure).
     """
     if DB_READY: return
     if (request.endpoint or '') not in {'landing','login','register','static'}:
@@ -454,7 +464,7 @@ def err_503(e): return render_template("error.html", code=503, message="Servizio
 def landing():
     """
     Pagina di benvenuto. Se l'utente è loggato, mostra quante predizioni pendenti
-    (senza feedback) ha nel badge.
+    (senza feedback) ha nel badge. Questo aiuta a “chiudere il loop” del feedback.
     """
     pending = 0
     if current_user.is_authenticated and not session.get('pending_prediction_id') and DB_READY:
@@ -542,7 +552,7 @@ def logout():
 def dashboard():
     """
     Storico predizioni dell'utente con filtri per classe/stato/intervalli data.
-    Puoi mettere mano qui se vuoi cambiare l'ordinamento o aggiungere filtri.
+    Nota: i filtri sono in querystring; si può estendere con ulteriori criteri.
     """
     if not DB_READY:
         return render_template("error.html", code=503, message="Database offline."), 503
@@ -721,6 +731,7 @@ def predict():
     """
     Riceve un'immagine, effettua inferenza e salva la predizione come 'pending'.
     Ritorna json: {class, confidence, prediction_id}
+    Perché csrf.exempt? Lo chiamiamo via fetch FormData; usiamo comunque sessione e login richiesto.
     """
     if not DB_READY:
         return jsonify({'error':'Database offline.'}), 503
@@ -796,7 +807,7 @@ def predict():
     x=transform(img).unsqueeze(0).to(device)
     with torch.no_grad():
         out=model(x)
-        if TEMPERATURE!=1.0: out=out/TEMPERATURE
+        if TEMPERATURE!=1.0: out=out/TEMPERATURE  # calibrazione confidenza
         probs=torch.softmax(out[0],dim=0)
         p,idx=torch.max(probs,0)
         cls=CLASS_NAMES[idx.item()]
@@ -927,7 +938,7 @@ def do_export():
 
     preds = list(predictions_collection.find(q).sort('timestamp', -1))
 
-    # calcolo trust per gli user presenti nel set
+    # calcolo trust per gli user presenti nel set (evita ricalcoli per riga)
     uids = sorted({p.get('user_id') for p in preds if p.get('user_id')})
     trust_map = {uid: compute_user_trust(uid) for uid in uids}
 

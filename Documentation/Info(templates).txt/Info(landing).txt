@@ -1,0 +1,16 @@
+landing.html (home/benvenuto)
+    cosa fa:
+        - pagina iniziale pubblica
+        - se l’utente è autenticato, può mostrare un badge “predizioni pendenti”
+
+    contiene:
+        - call to action (registrati / accedi / vai all’app)
+        - messaggi flash (se presenti)
+        - stile semplice ereditato da base.html
+
+    dati dal server:
+        - pending_count (numero predizioni senza feedback per l’utente corrente, se loggato)
+
+    note:
+        - non include JS specifici
+        - link rapidi a /login /register /app

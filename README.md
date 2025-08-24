@@ -1,2 +1,3 @@
 Tutta ladocumentazione è in Documentation, inoltre il modello di IA che ho
-usato si trova in un'altra repository: Pitone-IA
+usato si trova in un'altra repository: Pitone-IA, consiglio nel tuo terminale
+esegui requirements.txt
