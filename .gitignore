@@ -48,3 +48,6 @@ desktop.ini
 *.pt
 *.onnx
 *.h5
+
+# === txt ===
+CosedaFare.txt
