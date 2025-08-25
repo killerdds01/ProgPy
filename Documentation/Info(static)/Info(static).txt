@@ -1,6 +1,6 @@
 static/ contiene tutti i file serviti "così come sono" al browser: JS, CSS, font, icone...
 quindi che non passano dalla logica di Python be dal motore del template
-Tutto quello che è instatic è pubblico
+Tutto quello che è in static è pubblico
     Contiene:
         static/static/js/
             -JS lato client, lo script dell'interfaccia index e profile
@@ -9,7 +9,7 @@ Tutto quello che è instatic è pubblico
         static/static/img
             -Immagini utili, in questo caso quella sul caricamento di index
 Flask serve gli statici con cache HTTP
-CSP (Content-Security-Policy): imostiamo gli heaer restrittivi:
+CSP (Content-Security-Policy): impostiamo gli header restrittivi:
     default-src 'self'
     img-src 'self' data: blob:
     style-src 'self' 'unsafe-inline' https://cnd.tailwindscss.com
